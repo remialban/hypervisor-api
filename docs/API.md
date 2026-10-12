@@ -2,22 +2,20 @@
 
 Base URL : `http://127.0.0.1:3000`
 
-Toutes les donnees sont stockees dans SQLite (`api.db`). Les identifiants sont des UUID.
+## Stockage
 
-## Reponse d'erreur
+SQLite (`api.db`) stocke uniquement les hyperviseurs et leurs liens de connexion :
 
-```json
-{
-  "statut": "erreur",
-  "contenu": "Message d'erreur"
-}
-```
+- `id`
+- `nom`
+- `uri`
+- `statut`
+
+Les VM, disques et réseaux ne sont pas stockes dans SQLite. Ces ressources seront gerees directement avec libvirt lorsque les handlers seront implementes.
 
 ## Sante
 
 ### `GET /ping`
-
-Verifie que l'API repond.
 
 Reponse `200` :
 
@@ -33,9 +31,7 @@ Liste les hyperviseurs enregistres. Le statut est revalide aupres de libvirt.
 
 ### `POST /api/hypervisors`
 
-Ajoute un hyperviseur apres verification de sa connexion libvirt.
-
-Corps :
+Ajoute un hyperviseur dans SQLite apres verification de sa connexion libvirt.
 
 ```json
 {
@@ -52,7 +48,7 @@ Retourne un hyperviseur et son statut courant.
 
 ### `PATCH /api/hypervisors/{id}`
 
-Modifie le nom ou l'URI. Les champs sont optionnels :
+Modifie le nom ou l'URI, puis met a jour SQLite.
 
 ```json
 {"nom":"kvm-production"}
@@ -66,21 +62,25 @@ Reponses : `200`, `404`, `502`.
 
 ### `DELETE /api/hypervisors/{id}`
 
-Supprime l'enregistrement de l'API et de SQLite. Cette route ne supprime pas l'hote KVM.
+Supprime uniquement l'enregistrement de SQLite. Cette route ne supprime pas l'hote KVM.
 
 Reponses : `204` ou `404`.
 
-## Machines virtuelles
+## VM
 
-`{hypervisor_id}` est l'identifiant de l'hyperviseur et `{vm_id}` celui de la VM.
+Les routes VM sont exposees, mais ne stockent rien dans SQLite et repondent actuellement `501 Not Implemented`.
 
-### `GET /api/hypervisors/{hypervisor_id}/vms`
+```text
+GET    /api/hypervisors/{hypervisor_id}/vms
+POST   /api/hypervisors/{hypervisor_id}/vms
+GET    /api/hypervisors/{hypervisor_id}/vms/{vm_id}
+POST   /api/hypervisors/{hypervisor_id}/vms/{vm_id}/start
+POST   /api/hypervisors/{hypervisor_id}/vms/{vm_id}/stop
+POST   /api/hypervisors/{hypervisor_id}/vms/{vm_id}/clone
+DELETE /api/hypervisors/{hypervisor_id}/vms/{vm_id}
+```
 
-Liste les VM stockees pour un hyperviseur.
-
-### `POST /api/hypervisors/{hypervisor_id}/vms`
-
-Enregistre une VM :
+Corps prevu pour la creation :
 
 ```json
 {
@@ -90,45 +90,19 @@ Enregistre une VM :
 }
 ```
 
-Reponse : `201` avec une VM au statut `arretee`.
-
-### `GET /api/hypervisors/{hypervisor_id}/vms/{vm_id}`
-
-Retourne une VM.
-
-### `POST /api/hypervisors/{hypervisor_id}/vms/{vm_id}/start`
-
-Met la VM au statut `demarree` dans SQLite.
-
-### `POST /api/hypervisors/{hypervisor_id}/vms/{vm_id}/stop`
-
-Met la VM au statut `arretee` dans SQLite.
-
-### `POST /api/hypervisors/{hypervisor_id}/vms/{vm_id}/clone`
-
-Cree une nouvelle entree VM avec le corps fourni :
-
-```json
-{
-  "nom": "vm-clone",
-  "memoire_mb": 2048,
-  "vcpus": 2
-}
-```
-
-### `DELETE /api/hypervisors/{hypervisor_id}/vms/{vm_id}`
-
-Supprime la VM de SQLite.
-
 ## Disques
 
-### `GET /api/hypervisors/{hypervisor_id}/disks`
+Les routes disques sont exposees, mais ne stockent rien dans SQLite et repondent actuellement `501 Not Implemented`.
 
-Liste les disques persistants.
+```text
+GET    /api/hypervisors/{hypervisor_id}/disks
+POST   /api/hypervisors/{hypervisor_id}/disks
+GET    /api/hypervisors/{hypervisor_id}/disks/{disk_id}
+PATCH  /api/hypervisors/{hypervisor_id}/disks/{disk_id}
+DELETE /api/hypervisors/{hypervisor_id}/disks/{disk_id}
+```
 
-### `POST /api/hypervisors/{hypervisor_id}/disks`
-
-Cree une entree disque :
+Corps prevu :
 
 ```json
 {
@@ -138,65 +112,40 @@ Cree une entree disque :
 }
 ```
 
-### `GET /api/hypervisors/{hypervisor_id}/disks/{disk_id}`
-
-Retourne un disque.
-
-### `PATCH /api/hypervisors/{hypervisor_id}/disks/{disk_id}`
-
-Modifie le nom, la taille ou le format du disque avec le meme corps JSON que la creation.
-
-### `DELETE /api/hypervisors/{hypervisor_id}/disks/{disk_id}`
-
-Supprime l'entree disque de SQLite.
-
 ## Reseaux
 
-### `GET /api/hypervisors/{hypervisor_id}/networks`
+Les routes reseaux sont exposees, mais ne stockent rien dans SQLite et repondent actuellement `501 Not Implemented`.
 
-Liste les reseaux stockes.
+```text
+GET  /api/hypervisors/{hypervisor_id}/networks
+POST /api/hypervisors/{hypervisor_id}/networks
+```
 
-### `POST /api/hypervisors/{hypervisor_id}/networks`
-
-Cree une entree reseau :
+Corps prevu :
 
 ```json
 {
-  "nom": "default",
-  "bridge": "virbr0"
+  "nom": "reseau-test",
+  "bridge": "virbr10"
 }
 ```
-
-`bridge` est optionnel et peut etre `null`.
 
 ## VNC
 
 ### `GET /api/hypervisors/{hypervisor_id}/vms/{vm_id}/vnc`
 
-Point d'extension pour retourner les informations de connexion VNC.
+Retourne actuellement `501 Not Implemented`. Aucun acces VNC n'est stocke dans SQLite.
 
-Cette route repond actuellement `501 Not Implemented`; elle ne demarre pas encore de proxy VNC.
+## Documentation interactive
 
-## Exemples complets
+Swagger UI :
 
-Creer une VM :
-
-```bash
-curl -X POST http://127.0.0.1:3000/api/hypervisors/HYPERVISOR_ID/vms \
-  -H 'Content-Type: application/json' \
-  -d '{"nom":"vm-test","memoire_mb":2048,"vcpus":2}'
+```text
+http://127.0.0.1:3000/swagger-ui/
 ```
 
-Lister les disques :
+OpenAPI JSON :
 
-```bash
-curl http://127.0.0.1:3000/api/hypervisors/HYPERVISOR_ID/disks
-```
-
-Creer un reseau :
-
-```bash
-curl -X POST http://127.0.0.1:3000/api/hypervisors/HYPERVISOR_ID/networks \
-  -H 'Content-Type: application/json' \
-  -d '{"nom":"reseau-test","bridge":"virbr10"}'
+```text
+http://127.0.0.1:3000/api-docs/openapi.json
 ```

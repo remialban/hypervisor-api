@@ -5,14 +5,12 @@ API Rust avec Axum pour enregistrer plusieurs hyperviseurs KVM et gerer leurs re
 ## Fonctionnalites
 
 - CRUD des hyperviseurs dans SQLite.
-- CRUD des VM dans SQLite.
-- Demarrage et arret d'une VM dans son etat persistant.
-- CRUD des disques dans SQLite.
-- Creation et liste des reseaux dans SQLite.
+- CRUD des VM prevu via libvirt, sans stockage SQLite.
+- Gestion des disques et reseaux prevue via libvirt, sans stockage SQLite.
 - Documentation OpenAPI et interface Swagger.
 - Verification de la connexion libvirt lors de l'ajout ou de la modification d'un hyperviseur.
 
-Les operations libvirt reelles pour creer/demarrer une VM, creer un disque ou ouvrir VNC sont encore a brancher dans les handlers correspondants.
+Les operations libvirt reelles pour gerer les VM, disques, reseaux et VNC sont encore a brancher dans les handlers correspondants.
 
 ## Prerequis
 
@@ -71,12 +69,11 @@ La base est creee automatiquement au demarrage :
 api.db
 ```
 
-Elle contient les tables :
+Elle contient uniquement la table :
 
 - `hypervisors`
-- `vms`
-- `disks`
-- `networks`
+
+Les VM, disques et reseaux ne sont pas ecrits dans SQLite. Leur source de verite sera libvirt lorsque les handlers seront implementes.
 
 Ne pas supprimer `api.db` si les donnees doivent etre conservees.
 
@@ -129,8 +126,8 @@ src/
 ├── models.rs          Modeles JSON et SQLx
 ├── routes.rs          Declaration des routes
 ├── hypervisors.rs     CRUD hyperviseurs et controle libvirt
-├── vms.rs             CRUD VM et statuts
-├── infrastructure.rs  Disques, reseaux et VNC
+├── vms.rs             Routes VM, sans stockage local
+├── infrastructure.rs  Routes disques, reseaux et VNC, sans stockage local
 ├── common.rs          Reponses communes
 └── docs.rs            Specification OpenAPI
 ```
