@@ -24,11 +24,11 @@ async fn main() {
         SwaggerUi::new("/swagger-ui")
             .url("/api-docs/openapi.json", docs::ApiDoc::openapi()),
     );
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:3000")
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000")
         .await
         .expect("Impossible d'ouvrir le port 3000");
 
-    println!("API active sur http://127.0.0.1:3000");
+    println!("API active sur http://0.0.0.0:3000");
     axum::serve(listener, app)
         .await
         .expect("Erreur pendant l'execution du serveur");
