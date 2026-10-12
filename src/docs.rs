@@ -9,6 +9,7 @@ use crate::{
         NetworkRequest, UpdateHypervisor, VirtualMachine,
     },
     vms,
+    vnc,
 };
 
 #[derive(OpenApi)]
@@ -39,7 +40,7 @@ use crate::{
         infrastructure::delete_disk,
         infrastructure::list_networks,
         infrastructure::create_network,
-        infrastructure::vnc
+        vnc::connect
     ),
     components(schemas(
         Message,

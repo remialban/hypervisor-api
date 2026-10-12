@@ -9,6 +9,7 @@ use crate::{
     infrastructure,
     state::SharedState,
     vms,
+    vnc,
 };
 
 pub fn create_routes(state: SharedState) -> Router {
@@ -60,7 +61,7 @@ pub fn create_routes(state: SharedState) -> Router {
         )
         .route(
             "/api/hypervisors/{hypervisor_id}/vms/{vm_id}/vnc",
-            get(infrastructure::vnc),
+            get(vnc::connect),
         )
         .with_state(state)
 }

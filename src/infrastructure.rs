@@ -42,7 +42,3 @@ pub async fn create_network(Path(_hypervisor_id): Path<String>, Json(body): Json
     not_implemented("Network creation will be connected to libvirt; networks are not stored in SQLite")
 }
 
-#[utoipa::path(get, path = "/api/hypervisors/{hypervisor_id}/vms/{vm_id}/vnc", params(("hypervisor_id" = String, Path), ("vm_id" = String, Path)), responses((status = 501, body = Message)), tag = "Infrastructure")]
-pub async fn vnc(Path((_hypervisor_id, _vm_id)): Path<(String, String)>) -> ApiResponse {
-    not_implemented("VNC access will be connected to libvirt")
-}

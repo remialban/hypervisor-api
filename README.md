@@ -127,7 +127,8 @@ src/
 ├── routes.rs          Declaration des routes
 ├── hypervisors.rs     CRUD hyperviseurs et controle libvirt
 ├── vms.rs             Routes VM, sans stockage local
-├── infrastructure.rs  Routes disques, reseaux et VNC, sans stockage local
+├── infrastructure.rs  Routes disques et reseaux, sans stockage local
+├── vnc.rs             Routes VNC et proxy WebSocket
 ├── common.rs          Reponses communes
 └── docs.rs            Specification OpenAPI
 ```
@@ -137,7 +138,8 @@ src/
 Pour limiter les conflits :
 
 - developpeur 1 : `hypervisors.rs`, `state.rs`, migrations SQLite ;
-- developpeur 2 : `vms.rs`, `infrastructure.rs`, modeles OpenAPI ;
+- developpeur 2 : `vms.rs`, modeles VM et operations libvirt VM ;
+- developpeur 3 : `infrastructure.rs`, `vnc.rs`, disques, reseaux et proxy VNC ;
 - integration : `routes.rs`, `docs.rs`, `main.rs`.
 
 Avant chaque commit :

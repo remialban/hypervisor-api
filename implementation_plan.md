@@ -32,6 +32,7 @@ Les VM, disques et reseaux ne doivent pas etre stockes dans SQLite. Leur source 
 - [x] Routes disques conservees comme contrat API sans ecriture SQLite.
 - [x] Routes reseaux conservees comme contrat API sans ecriture SQLite.
 - [x] Route VNC exposee comme point d'extension.
+- [x] Handler VNC isole dans `vnc.rs` pour permettre un developpement independant.
 - [x] Documentation OpenAPI generee avec Utoipa.
 - [x] Interface Swagger disponible sur `/swagger-ui/`.
 - [x] README d'installation et de demarrage.
@@ -96,7 +97,7 @@ Les VM, disques et reseaux ne doivent pas etre stockes dans SQLite. Leur source 
 - [ ] Ajouter Docker ou une procedure de deploiement.
 - [ ] Ajouter une supervision et un endpoint de sante libvirt.
 
-## Organisation du travail a deux
+## Organisation du travail a trois
 
 ### Developpeur 1 : hyperviseurs et fondation
 
@@ -109,8 +110,12 @@ Les VM, disques et reseaux ne doivent pas etre stockes dans SQLite. Leur source 
 ### Developpeur 2 : ressources libvirt
 
 - `vms.rs`
-- `infrastructure.rs`
 - service VM
+
+### Developpeur 3 : infrastructure et VNC
+
+- `infrastructure.rs`
+- `vnc.rs`
 - service disques
 - service reseaux
 - VNC

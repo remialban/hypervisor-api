@@ -6,6 +6,7 @@ mod models;
 mod routes;
 mod state;
 mod vms;
+mod vnc;
 
 use std::sync::Arc;
 
