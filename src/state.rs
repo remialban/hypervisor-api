@@ -24,6 +24,43 @@ impl AppState {
         .execute(&db)
         .await?;
 
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS vms (
+                id TEXT PRIMARY KEY NOT NULL,
+                hypervisor_id TEXT NOT NULL,
+                nom TEXT NOT NULL,
+                memoire_mb INTEGER NOT NULL,
+                vcpus INTEGER NOT NULL,
+                statut TEXT NOT NULL
+            )",
+        )
+        .execute(&db)
+        .await?;
+
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS disks (
+                id TEXT PRIMARY KEY NOT NULL,
+                hypervisor_id TEXT NOT NULL,
+                nom TEXT NOT NULL,
+                taille_gb INTEGER NOT NULL,
+                format TEXT NOT NULL
+            )",
+        )
+        .execute(&db)
+        .await?;
+
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS networks (
+                id TEXT PRIMARY KEY NOT NULL,
+                hypervisor_id TEXT NOT NULL,
+                nom TEXT NOT NULL,
+                bridge TEXT,
+                statut TEXT NOT NULL
+            )",
+        )
+        .execute(&db)
+        .await?;
+
         Ok(Self { db })
     }
 }

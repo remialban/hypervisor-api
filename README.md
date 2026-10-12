@@ -1,0 +1,151 @@
+# KVM Multi-Hypervisor API
+
+API Rust avec Axum pour enregistrer plusieurs hyperviseurs KVM et gerer leurs ressources.
+
+## Fonctionnalites
+
+- CRUD des hyperviseurs dans SQLite.
+- CRUD des VM dans SQLite.
+- Demarrage et arret d'une VM dans son etat persistant.
+- CRUD des disques dans SQLite.
+- Creation et liste des reseaux dans SQLite.
+- Documentation OpenAPI et interface Swagger.
+- Verification de la connexion libvirt lors de l'ajout ou de la modification d'un hyperviseur.
+
+Les operations libvirt reelles pour creer/demarrer une VM, creer un disque ou ouvrir VNC sont encore a brancher dans les handlers correspondants.
+
+## Prerequis
+
+- Linux avec KVM/libvirt.
+- Rust et Cargo.
+- Packages libvirt/QEMU.
+
+Sur Debian ou Ubuntu :
+
+```bash
+sudo apt update
+sudo apt install build-essential pkg-config libvirt-dev libvirt-daemon-system libvirt-clients qemu-kvm
+```
+
+Verifier libvirt :
+
+```bash
+virsh -c qemu:///system list --all
+```
+
+Ajouter l'utilisateur au groupe libvirt si necessaire, puis ouvrir une nouvelle session :
+
+```bash
+sudo usermod -aG libvirt "$USER"
+```
+
+## Installation
+
+Depuis la racine du projet :
+
+```bash
+cargo check
+```
+
+Cargo telecharge les dependances, dont `virt`, `sqlx`, `utoipa` et Swagger UI.
+
+## Demarrage
+
+```bash
+cargo run
+```
+
+L'API ecoute sur :
+
+```text
+http://127.0.0.1:3000
+```
+
+Arreter le serveur avec `Ctrl+C`.
+
+## SQLite
+
+La base est creee automatiquement au demarrage :
+
+```text
+api.db
+```
+
+Elle contient les tables :
+
+- `hypervisors`
+- `vms`
+- `disks`
+- `networks`
+
+Ne pas supprimer `api.db` si les donnees doivent etre conservees.
+
+## Documentation interactive
+
+Swagger UI :
+
+```text
+http://127.0.0.1:3000/swagger-ui/
+```
+
+Document OpenAPI JSON :
+
+```text
+http://127.0.0.1:3000/api-docs/openapi.json
+```
+
+La liste complete des endpoints se trouve dans [docs/API.md](docs/API.md).
+
+## Test rapide
+
+Tester l'API :
+
+```bash
+curl http://127.0.0.1:3000/ping
+```
+
+Ajouter un hyperviseur local :
+
+```bash
+curl -X POST http://127.0.0.1:3000/api/hypervisors \
+  -H 'Content-Type: application/json' \
+  -d '{"nom":"kvm-local","uri":"qemu:///system"}'
+```
+
+Lister les hyperviseurs :
+
+```bash
+curl http://127.0.0.1:3000/api/hypervisors
+```
+
+L'URI libvirt doit etre joignable. Une URI invalide retourne `502 Bad Gateway`.
+
+## Organisation du code
+
+```text
+src/
+├── main.rs            Demarrage Axum, SQLite et Swagger
+├── state.rs           Pool SQLite et creation des tables
+├── models.rs          Modeles JSON et SQLx
+├── routes.rs          Declaration des routes
+├── hypervisors.rs     CRUD hyperviseurs et controle libvirt
+├── vms.rs             CRUD VM et statuts
+├── infrastructure.rs  Disques, reseaux et VNC
+├── common.rs          Reponses communes
+└── docs.rs            Specification OpenAPI
+```
+
+## Developpement a deux
+
+Pour limiter les conflits :
+
+- developpeur 1 : `hypervisors.rs`, `state.rs`, migrations SQLite ;
+- developpeur 2 : `vms.rs`, `infrastructure.rs`, modeles OpenAPI ;
+- integration : `routes.rs`, `docs.rs`, `main.rs`.
+
+Avant chaque commit :
+
+```bash
+cargo fmt --check
+cargo check
+```

@@ -4,7 +4,10 @@ use crate::{
     common,
     hypervisors,
     infrastructure,
-    models::{CreateHypervisor, CreateVm, DiskRequest, Hypervisor, Message, UpdateHypervisor},
+    models::{
+        CreateHypervisor, CreateVm, Disk, DiskRequest, Hypervisor, Message, Network,
+        NetworkRequest, UpdateHypervisor, VirtualMachine,
+    },
     vms,
 };
 
@@ -35,6 +38,7 @@ use crate::{
         infrastructure::modifier_disque,
         infrastructure::supprimer_disque,
         infrastructure::reseaux,
+        infrastructure::creer_reseau,
         infrastructure::vnc
     ),
     components(schemas(
@@ -43,7 +47,11 @@ use crate::{
         CreateHypervisor,
         UpdateHypervisor,
         CreateVm,
-        DiskRequest
+        VirtualMachine,
+        Disk,
+        DiskRequest,
+        Network,
+        NetworkRequest
     )),
     tags(
         (name = "Hypervisors", description = "Gestion des hyperviseurs"),

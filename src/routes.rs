@@ -56,7 +56,7 @@ pub fn creer_routes(state: SharedState) -> Router {
         )
         .route(
             "/api/hypervisors/{hypervisor_id}/networks",
-            get(infrastructure::reseaux),
+            get(infrastructure::reseaux).post(infrastructure::creer_reseau),
         )
         .route(
             "/api/hypervisors/{hypervisor_id}/vms/{vm_id}/vnc",
