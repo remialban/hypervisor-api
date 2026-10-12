@@ -4,34 +4,34 @@ use utoipa::ToSchema;
 
 #[derive(Serialize, ToSchema)]
 pub struct Message {
-    pub statut: String,
-    pub contenu: String,
+    pub status: String,
+    pub content: String,
 }
 
 #[derive(Clone, Serialize, ToSchema, FromRow)]
 pub struct Hypervisor {
     pub id: String,
-    pub nom: String,
+    pub name: String,
     pub uri: String,
-    pub statut: String,
+    pub status: String,
 }
 
 #[derive(Deserialize, ToSchema)]
 pub struct CreateHypervisor {
-    pub nom: String,
+    pub name: String,
     pub uri: String,
 }
 
 #[derive(Deserialize, ToSchema)]
 pub struct UpdateHypervisor {
-    pub nom: Option<String>,
+    pub name: Option<String>,
     pub uri: Option<String>,
 }
 
 #[derive(Deserialize, ToSchema)]
 pub struct CreateVm {
-    pub nom: String,
-    pub memoire_mb: u64,
+    pub name: String,
+    pub memory_mb: u64,
     pub vcpus: u16,
 }
 
@@ -39,16 +39,16 @@ pub struct CreateVm {
 pub struct VirtualMachine {
     pub id: String,
     pub hypervisor_id: String,
-    pub nom: String,
-    pub memoire_mb: i64,
+    pub name: String,
+    pub memory_mb: i64,
     pub vcpus: i64,
-    pub statut: String,
+    pub status: String,
 }
 
 #[derive(Deserialize, ToSchema)]
 pub struct DiskRequest {
-    pub nom: String,
-    pub taille_gb: u64,
+    pub name: String,
+    pub size_gb: u64,
     pub format: String,
 }
 
@@ -56,8 +56,8 @@ pub struct DiskRequest {
 pub struct Disk {
     pub id: String,
     pub hypervisor_id: String,
-    pub nom: String,
-    pub taille_gb: i64,
+    pub name: String,
+    pub size_gb: i64,
     pub format: String,
 }
 
@@ -65,13 +65,13 @@ pub struct Disk {
 pub struct Network {
     pub id: String,
     pub hypervisor_id: String,
-    pub nom: String,
+    pub name: String,
     pub bridge: Option<String>,
-    pub statut: String,
+    pub status: String,
 }
 
 #[derive(Deserialize, ToSchema)]
 pub struct NetworkRequest {
-    pub nom: String,
+    pub name: String,
     pub bridge: Option<String>,
 }

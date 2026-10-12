@@ -106,7 +106,7 @@ Ajouter un hyperviseur local :
 ```bash
 curl -X POST http://127.0.0.1:3000/api/hypervisors \
   -H 'Content-Type: application/json' \
-  -d '{"nom":"kvm-local","uri":"qemu:///system"}'
+  -d '{"name":"kvm-local","uri":"qemu:///system"}'
 ```
 
 Lister les hyperviseurs :

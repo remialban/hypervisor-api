@@ -18,20 +18,20 @@ async fn main() {
     let state = Arc::new(
         AppState::new("sqlite://api.db?mode=rwc")
             .await
-            .expect("Impossible d'initialiser la base SQLite"),
+            .expect("Could not initialize the SQLite database"),
     );
-    let app = routes::creer_routes(state).merge(
+    let app = routes::create_routes(state).merge(
         SwaggerUi::new("/swagger-ui")
             .url("/api-docs/openapi.json", docs::ApiDoc::openapi()),
     );
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000")
         .await
-        .expect("Impossible d'ouvrir le port 3000");
+        .expect("Could not bind port 3000");
 
     println!("API active sur http://0.0.0.0:3000");
     axum::serve(listener, app)
         .await
-        .expect("Erreur pendant l'execution du serveur");
+        .expect("Server execution failed");
 
         
 }

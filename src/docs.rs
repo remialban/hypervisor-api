@@ -16,29 +16,29 @@ use crate::{
     info(
         title = "KVM Multi-Hypervisor API",
         version = "0.1.0",
-        description = "API de gestion des hyperviseurs KVM, VM, disques, reseaux et VNC"
+        description = "API for managing KVM hypervisors, virtual machines, disks, networks and VNC"
     ),
     paths(
         common::ping,
-        hypervisors::lister,
-        hypervisors::ajouter,
-        hypervisors::obtenir,
-        hypervisors::modifier,
-        hypervisors::supprimer,
-        vms::lister,
-        vms::obtenir,
-        vms::creer,
-        vms::demarrer,
-        vms::eteindre,
-        vms::cloner,
-        vms::supprimer,
-        infrastructure::disques,
-        infrastructure::creer_disque,
-        infrastructure::obtenir_disque,
-        infrastructure::modifier_disque,
-        infrastructure::supprimer_disque,
-        infrastructure::reseaux,
-        infrastructure::creer_reseau,
+        hypervisors::list,
+        hypervisors::create,
+        hypervisors::get,
+        hypervisors::update,
+        hypervisors::delete,
+        vms::list,
+        vms::get,
+        vms::create,
+        vms::start,
+        vms::stop,
+        vms::clone,
+        vms::delete,
+        infrastructure::list_disks,
+        infrastructure::create_disk,
+        infrastructure::get_disk,
+        infrastructure::update_disk,
+        infrastructure::delete_disk,
+        infrastructure::list_networks,
+        infrastructure::create_network,
         infrastructure::vnc
     ),
     components(schemas(
@@ -54,9 +54,9 @@ use crate::{
         NetworkRequest
     )),
     tags(
-        (name = "Hypervisors", description = "Gestion des hyperviseurs"),
-        (name = "VMs", description = "Gestion des machines virtuelles"),
-        (name = "Infrastructure", description = "Disques, reseaux et VNC")
+        (name = "Hypervisors", description = "Hypervisor management"),
+        (name = "VMs", description = "Virtual machine management"),
+        (name = "Infrastructure", description = "Disks, networks and VNC")
     )
 )]
 pub struct ApiDoc;

@@ -37,6 +37,7 @@ Les VM, disques et reseaux ne doivent pas etre stockes dans SQLite. Leur source 
 - [x] README d'installation et de demarrage.
 - [x] Documentation des endpoints dans `docs/API.md`.
 - [x] Compilation verifiee avec `cargo check`.
+- [x] Identifiants, champs, fonctions, messages et descriptions OpenAPI du code source passes en anglais.
 - [x] Workflow GitHub Actions ajoute pour verifier chaque `push` et `pull_request`.
 
 ## Reste a faire

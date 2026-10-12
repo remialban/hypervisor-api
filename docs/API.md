@@ -7,9 +7,9 @@ Base URL : `http://127.0.0.1:3000`
 SQLite (`api.db`) stocke uniquement les hyperviseurs et leurs liens de connexion :
 
 - `id`
-- `nom`
+- `name`
 - `uri`
-- `statut`
+- `status`
 
 Les VM, disques et réseaux ne sont pas stockes dans SQLite. Ces ressources seront gerees directement avec libvirt lorsque les handlers seront implementes.
 
@@ -20,7 +20,7 @@ Les VM, disques et réseaux ne sont pas stockes dans SQLite. Ces ressources sero
 Reponse `200` :
 
 ```json
-{"statut":"ok","contenu":"pong"}
+{"status":"ok","content":"pong"}
 ```
 
 ## Hyperviseurs
@@ -35,7 +35,7 @@ Ajoute un hyperviseur dans SQLite apres verification de sa connexion libvirt.
 
 ```json
 {
-  "nom": "kvm-local",
+  "name": "kvm-local",
   "uri": "qemu:///system"
 }
 ```
@@ -51,7 +51,7 @@ Retourne un hyperviseur et son statut courant.
 Modifie le nom ou l'URI, puis met a jour SQLite.
 
 ```json
-{"nom":"kvm-production"}
+{"name":"kvm-production"}
 ```
 
 ```json
@@ -84,8 +84,8 @@ Corps prevu pour la creation :
 
 ```json
 {
-  "nom": "vm-test",
-  "memoire_mb": 2048,
+  "name": "vm-test",
+  "memory_mb": 2048,
   "vcpus": 2
 }
 ```
@@ -106,8 +106,8 @@ Corps prevu :
 
 ```json
 {
-  "nom": "vm-test-disk",
-  "taille_gb": 20,
+  "name": "vm-test-disk",
+  "size_gb": 20,
   "format": "qcow2"
 }
 ```
@@ -125,7 +125,7 @@ Corps prevu :
 
 ```json
 {
-  "nom": "reseau-test",
+  "name": "reseau-test",
   "bridge": "virbr10"
 }
 ```

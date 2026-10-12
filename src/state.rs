@@ -16,9 +16,9 @@ impl AppState {
         sqlx::query(
             "CREATE TABLE IF NOT EXISTS hypervisors (
                 id TEXT PRIMARY KEY NOT NULL,
-                nom TEXT NOT NULL,
+                name TEXT NOT NULL,
                 uri TEXT NOT NULL,
-                statut TEXT NOT NULL
+                status TEXT NOT NULL
             )",
         )
         .execute(&db)

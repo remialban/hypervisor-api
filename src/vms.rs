@@ -1,42 +1,42 @@
 use axum::{extract::Path, http::StatusCode, Json};
 
-use crate::{common::non_implemente, models::{CreateVm, Message}};
+use crate::{common::not_implemented, models::{CreateVm, Message}};
 
 type ApiResponse = (StatusCode, Json<Message>);
 
 #[utoipa::path(get, path = "/api/hypervisors/{hypervisor_id}/vms", params(("hypervisor_id" = String, Path)), responses((status = 501, body = Message)), tag = "VMs")]
-pub async fn lister(Path(_hypervisor_id): Path<String>) -> ApiResponse {
-    non_implemente("La liste des VM sera branchee a libvirt; aucune VM n'est stockee en SQLite")
+pub async fn list(Path(_hypervisor_id): Path<String>) -> ApiResponse {
+    not_implemented("VM listing will be connected to libvirt; VMs are not stored in SQLite")
 }
 
 #[utoipa::path(get, path = "/api/hypervisors/{hypervisor_id}/vms/{vm_id}", params(("hypervisor_id" = String, Path), ("vm_id" = String, Path)), responses((status = 501, body = Message)), tag = "VMs")]
-pub async fn obtenir(Path((_hypervisor_id, _vm_id)): Path<(String, String)>) -> ApiResponse {
-    non_implemente("La lecture d'une VM sera branchee a libvirt")
+pub async fn get(Path((_hypervisor_id, _vm_id)): Path<(String, String)>) -> ApiResponse {
+    not_implemented("VM reading will be connected to libvirt")
 }
 
 #[utoipa::path(post, path = "/api/hypervisors/{hypervisor_id}/vms", params(("hypervisor_id" = String, Path)), request_body = CreateVm, responses((status = 501, body = Message)), tag = "VMs")]
-pub async fn creer(Path(_hypervisor_id): Path<String>, Json(body): Json<CreateVm>) -> ApiResponse {
-    let _ = (body.nom, body.memoire_mb, body.vcpus);
-    non_implemente("La creation de VM sera branchee a libvirt; aucune VM n'est stockee en SQLite")
+pub async fn create(Path(_hypervisor_id): Path<String>, Json(body): Json<CreateVm>) -> ApiResponse {
+    let _ = (body.name, body.memory_mb, body.vcpus);
+    not_implemented("VM creation will be connected to libvirt; VMs are not stored in SQLite")
 }
 
 #[utoipa::path(post, path = "/api/hypervisors/{hypervisor_id}/vms/{vm_id}/start", params(("hypervisor_id" = String, Path), ("vm_id" = String, Path)), responses((status = 501, body = Message)), tag = "VMs")]
-pub async fn demarrer(Path((_hypervisor_id, _vm_id)): Path<(String, String)>) -> ApiResponse {
-    non_implemente("Le demarrage de VM sera branche a libvirt")
+pub async fn start(Path((_hypervisor_id, _vm_id)): Path<(String, String)>) -> ApiResponse {
+    not_implemented("VM startup will be connected to libvirt")
 }
 
 #[utoipa::path(post, path = "/api/hypervisors/{hypervisor_id}/vms/{vm_id}/stop", params(("hypervisor_id" = String, Path), ("vm_id" = String, Path)), responses((status = 501, body = Message)), tag = "VMs")]
-pub async fn eteindre(Path((_hypervisor_id, _vm_id)): Path<(String, String)>) -> ApiResponse {
-    non_implemente("L'arret de VM sera branche a libvirt")
+pub async fn stop(Path((_hypervisor_id, _vm_id)): Path<(String, String)>) -> ApiResponse {
+    not_implemented("VM shutdown will be connected to libvirt")
 }
 
 #[utoipa::path(post, path = "/api/hypervisors/{hypervisor_id}/vms/{vm_id}/clone", params(("hypervisor_id" = String, Path), ("vm_id" = String, Path)), request_body = CreateVm, responses((status = 501, body = Message)), tag = "VMs")]
-pub async fn cloner(Path((_hypervisor_id, _vm_id)): Path<(String, String)>, Json(body): Json<CreateVm>) -> ApiResponse {
-    let _ = (body.nom, body.memoire_mb, body.vcpus);
-    non_implemente("Le clonage de VM sera branche a libvirt")
+pub async fn clone(Path((_hypervisor_id, _vm_id)): Path<(String, String)>, Json(body): Json<CreateVm>) -> ApiResponse {
+    let _ = (body.name, body.memory_mb, body.vcpus);
+    not_implemented("VM cloning will be connected to libvirt")
 }
 
 #[utoipa::path(delete, path = "/api/hypervisors/{hypervisor_id}/vms/{vm_id}", params(("hypervisor_id" = String, Path), ("vm_id" = String, Path)), responses((status = 501, body = Message)), tag = "VMs")]
-pub async fn supprimer(Path((_hypervisor_id, _vm_id)): Path<(String, String)>) -> ApiResponse {
-    non_implemente("La suppression de VM sera branchee a libvirt")
+pub async fn delete(Path((_hypervisor_id, _vm_id)): Path<(String, String)>) -> ApiResponse {
+    not_implemented("VM deletion will be connected to libvirt")
 }

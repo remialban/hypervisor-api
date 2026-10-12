@@ -11,52 +11,52 @@ use crate::{
     vms,
 };
 
-pub fn creer_routes(state: SharedState) -> Router {
+pub fn create_routes(state: SharedState) -> Router {
     Router::new()
         .route("/ping", get(ping))
         .route(
             "/api/hypervisors",
-            get(hypervisors::lister).post(hypervisors::ajouter),
+            get(hypervisors::list).post(hypervisors::create),
         )
         .route(
             "/api/hypervisors/{id}",
-            get(hypervisors::obtenir)
-                .patch(hypervisors::modifier)
-                .delete(hypervisors::supprimer),
+            get(hypervisors::get)
+                .patch(hypervisors::update)
+                .delete(hypervisors::delete),
         )
         .route(
             "/api/hypervisors/{hypervisor_id}/vms",
-            get(vms::lister).post(vms::creer),
+            get(vms::list).post(vms::create),
         )
         .route(
             "/api/hypervisors/{hypervisor_id}/vms/{vm_id}",
-            get(vms::obtenir).delete(vms::supprimer),
+            get(vms::get).delete(vms::delete),
         )
         .route(
             "/api/hypervisors/{hypervisor_id}/vms/{vm_id}/start",
-            post(vms::demarrer),
+            post(vms::start),
         )
         .route(
             "/api/hypervisors/{hypervisor_id}/vms/{vm_id}/stop",
-            post(vms::eteindre),
+            post(vms::stop),
         )
         .route(
             "/api/hypervisors/{hypervisor_id}/vms/{vm_id}/clone",
-            post(vms::cloner),
+            post(vms::clone),
         )
         .route(
             "/api/hypervisors/{hypervisor_id}/disks",
-            get(infrastructure::disques).post(infrastructure::creer_disque),
+            get(infrastructure::list_disks).post(infrastructure::create_disk),
         )
         .route(
             "/api/hypervisors/{hypervisor_id}/disks/{disk_id}",
-            get(infrastructure::obtenir_disque)
-                .patch(infrastructure::modifier_disque)
-                .delete(infrastructure::supprimer_disque),
+            get(infrastructure::get_disk)
+                .patch(infrastructure::update_disk)
+                .delete(infrastructure::delete_disk),
         )
         .route(
             "/api/hypervisors/{hypervisor_id}/networks",
-            get(infrastructure::reseaux).post(infrastructure::creer_reseau),
+            get(infrastructure::list_networks).post(infrastructure::create_network),
         )
         .route(
             "/api/hypervisors/{hypervisor_id}/vms/{vm_id}/vnc",

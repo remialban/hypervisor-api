@@ -10,27 +10,27 @@ use crate::models::Message;
 )]
 pub async fn ping() -> Json<Message> {
     Json(Message {
-        statut: "ok".into(),
-        contenu: "pong".into(),
+        status: "ok".into(),
+        content: "pong".into(),
     })
 }
 
-pub fn non_implemente(message: &str) -> (StatusCode, Json<Message>) {
+pub fn not_implemented(message: &str) -> (StatusCode, Json<Message>) {
     (
         StatusCode::NOT_IMPLEMENTED,
         Json(Message {
-            statut: "non_implemente".into(),
-            contenu: message.into(),
+            status: "not_implemented".into(),
+            content: message.into(),
         }),
     )
 }
 
-pub fn erreur(status: StatusCode, message: &str) -> (StatusCode, Json<Message>) {
+pub fn error_response(status: StatusCode, message: &str) -> (StatusCode, Json<Message>) {
     (
         status,
         Json(Message {
-            statut: "erreur".into(),
-            contenu: message.into(),
+            status: "error".into(),
+            content: message.into(),
         }),
     )
 }
