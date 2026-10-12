@@ -1,1 +1,17 @@
-/target
+# Rust build artifacts
+/target/
+
+# Local SQLite database files
+*.db
+*.db-shm
+*.db-wal
+
+# Environment files and secrets
+.env
+.env.*
+!.env.example
+
+# Editor and operating system files
+.vscode/
+.idea/
+.DS_Store
