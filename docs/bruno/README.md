@@ -30,7 +30,7 @@ No secrets are needed today. If auth is added, use `{{process.env.NAME}}` with a
 | Folder | State |
 |---|---|
 | Health, Hypervisors | Implemented (SQLite + libvirt connection test) |
-| VMs, Disks, Networks, VNC | Return `501 {"status":"not_implemented","content":...}`. Assertions expect 501 for now. |
+| VMs, Disks, Networks, VNC (own Swagger tag and folder) | Return `501 {"status":"not_implemented","content":...}`. Assertions expect 501 for now. |
 | Error cases | 502 unreachable URI, 404 unknown id, 422 invalid body (framework message, plain text, not a `Message`) |
 
 When an endpoint gets implemented, change its `assert` status and body in the `.bru` file.
@@ -49,7 +49,7 @@ The API publishes its spec at `http://127.0.0.1:3000/api-docs/openapi.json` (UI:
 docs/bruno/
 ├── bruno.json / collection.bru     collection config and shared headers
 ├── environments/                   local.bru, remote-kvm.bru
-├── 00-Health … 05-Error-cases/     one folder per Swagger tag/concern, numbered for run order
+├── 00-Health … 06-Error-cases/     one folder per Swagger tag/concern, numbered for run order
 ├── check-sync.sh                   Swagger vs collection drift check
 └── .env.example
 ```
