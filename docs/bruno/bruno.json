@@ -1,0 +1,6 @@
+{
+  "version": "1",
+  "name": "KVM Multi-Hypervisor API",
+  "type": "collection",
+  "ignore": ["node_modules", ".git"]
+}

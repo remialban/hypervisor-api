@@ -1,0 +1,19 @@
+meta {
+  name: Get VM VNC access
+  type: http
+  seq: 8
+}
+
+get {
+  url: {{baseUrl}}{{apiPrefix}}/hypervisors/{{hypervisorId}}/vms/{{vmId}}/vnc
+  body: none
+  auth: none
+}
+
+assert {
+  res.status: eq 501
+}
+
+docs {
+  Lives in the Infrastructure tag in Swagger. Not implemented yet: the API returns 501 {status:"not_implemented",content}. Update the assertion once libvirt is wired.
+}

@@ -1,0 +1,19 @@
+meta {
+  name: List hypervisors
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{baseUrl}}{{apiPrefix}}/hypervisors
+  body: none
+  auth: none
+}
+
+assert {
+  res.status: eq 200
+}
+
+docs {
+  200 -> Hypervisor[] ordered by name. Status is re-checked against libvirt on every call (connected | disconnected).
+}

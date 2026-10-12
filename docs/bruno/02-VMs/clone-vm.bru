@@ -1,0 +1,27 @@
+meta {
+  name: Clone VM
+  type: http
+  seq: 6
+}
+
+post {
+  url: {{baseUrl}}{{apiPrefix}}/hypervisors/{{hypervisorId}}/vms/{{vmId}}/clone
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+    "name": "vm-01-clone",
+    "memory_mb": 2048,
+    "vcpus": 2
+  }
+}
+
+assert {
+  res.status: eq 501
+}
+
+docs {
+  Body is a CreateVm (same shape as VM creation). Not implemented yet: the API returns 501 {status:"not_implemented",content}. Update the assertion once libvirt is wired.
+}
