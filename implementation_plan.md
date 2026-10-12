@@ -37,6 +37,7 @@ Les VM, disques et reseaux ne doivent pas etre stockes dans SQLite. Leur source 
 - [x] README d'installation et de demarrage.
 - [x] Documentation des endpoints dans `docs/API.md`.
 - [x] Compilation verifiee avec `cargo check`.
+- [x] Workflow GitHub Actions ajoute pour verifier chaque `push` et `pull_request`.
 
 ## Reste a faire
 
@@ -84,7 +85,7 @@ Les VM, disques et reseaux ne doivent pas etre stockes dans SQLite. Leur source 
 
 ### Priorite 5 : qualite et exploitation
 
-- [ ] Installer `rustfmt` et appliquer `cargo fmt`.
+- [ ] Installer `rustfmt` localement et appliquer `cargo fmt`.
 - [ ] Ajouter des tests unitaires pour les modeles et services.
 - [ ] Ajouter des tests HTTP pour chaque route.
 - [ ] Ajouter un environnement de test libvirt ou des mocks.
@@ -132,6 +133,8 @@ Apres chaque changement de code :
 cargo check
 cargo test
 ```
+
+Le workflow GitHub Actions `.github/workflows/ci.yml` execute automatiquement ces controles sur chaque `push` et `pull_request`, avec en plus Clippy en mode `-D warnings`.
 
 Quand `rustfmt` est installe :
 

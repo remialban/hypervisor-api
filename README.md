@@ -145,4 +145,19 @@ Avant chaque commit :
 ```bash
 cargo fmt --check
 cargo check
+cargo test
+cargo clippy --all-targets --all-features -- -D warnings
 ```
+
+## Integration continue GitHub
+
+Le workflow [.github/workflows/ci.yml](.github/workflows/ci.yml) s'exécute automatiquement sur chaque `push` et `pull_request`.
+
+Il vérifie :
+
+- le formatage avec `cargo fmt` ;
+- la compilation avec `cargo check` ;
+- les tests avec `cargo test` ;
+- les erreurs Clippy avec `cargo clippy`.
+
+Une Pull Request ne doit pas être fusionnée si le workflow CI échoue.
