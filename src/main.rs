@@ -2,6 +2,8 @@ mod common;
 mod docs;
 mod errors;
 mod hypervisors;
+#[cfg(test)]
+mod http_tests;
 mod infrastructure;
 mod jobs;
 mod libvirt;

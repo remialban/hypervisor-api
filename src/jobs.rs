@@ -1,8 +1,8 @@
 use std::{collections::HashMap, sync::Mutex};
 
 use axum::{
-    extract::{Path, State},
     Json,
+    extract::{Path, State},
 };
 use serde::Serialize;
 use utoipa::ToSchema;
@@ -17,7 +17,7 @@ use crate::{
 /// Finished jobs are forgotten once the registry holds this many entries.
 const MAX_JOBS: usize = 200;
 
-#[derive(Clone, Copy, PartialEq, Serialize, ToSchema)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum JobStatus {
     Running,
@@ -87,10 +87,78 @@ impl JobRegistry {
 }
 
 #[utoipa::path(get, path = "/api/jobs/{job_id}", params(("job_id" = String, Path, description = "Job identifier")), responses((status = 200, body = Job), (status = 404, body = Message)), tag = "Jobs")]
-pub async fn get(State(state): State<SharedState>, Path(job_id): Path<String>) -> Result<Json<Job>, ApiError> {
+pub async fn get(
+    State(state): State<SharedState>,
+    Path(job_id): Path<String>,
+) -> Result<Json<Job>, ApiError> {
     state
         .jobs
         .get(&job_id)
         .map(Json)
         .ok_or_else(|| ApiError::NotFound("Job not found".into()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn vm() -> VirtualMachine {
+        VirtualMachine {
+            id: "id".into(),
+            hypervisor_id: "h".into(),
+            name: "vm".into(),
+            memory_mb: 1,
+            vcpus: 1,
+            status: "stopped".into(),
+        }
+    }
+
+    #[test]
+    fn a_new_job_is_running() {
+        let registry = JobRegistry::default();
+        let job = registry.start("clone");
+        let stored = registry.get(&job.id).unwrap();
+        assert_eq!(stored.status, JobStatus::Running);
+        assert!(stored.result.is_none() && stored.error.is_none());
+    }
+
+    #[test]
+    fn success_keeps_the_result() {
+        let registry = JobRegistry::default();
+        let job = registry.start("clone");
+        registry.finish(&job.id, Ok(vm()));
+        let stored = registry.get(&job.id).unwrap();
+        assert_eq!(stored.status, JobStatus::Succeeded);
+        assert_eq!(stored.result.unwrap().name, "vm");
+    }
+
+    #[test]
+    fn failure_keeps_the_message() {
+        let registry = JobRegistry::default();
+        let job = registry.start("clone");
+        registry.finish(&job.id, Err(ApiError::Conflict("nope".into())));
+        let stored = registry.get(&job.id).unwrap();
+        assert_eq!(stored.status, JobStatus::Failed);
+        assert_eq!(stored.error.as_deref(), Some("nope"));
+    }
+
+    #[test]
+    fn unknown_job_is_none_and_finishing_it_is_harmless() {
+        let registry = JobRegistry::default();
+        registry.finish("missing", Ok(vm()));
+        assert!(registry.get("missing").is_none());
+    }
+
+    #[test]
+    fn full_registry_forgets_finished_jobs_but_not_running_ones() {
+        let registry = JobRegistry::default();
+        let running = registry.start("clone");
+        let done = registry.start("clone");
+        registry.finish(&done.id, Ok(vm()));
+        for _ in 0..MAX_JOBS {
+            registry.start("clone");
+        }
+        assert!(registry.get(&running.id).is_some());
+        assert!(registry.get(&done.id).is_none());
+    }
 }

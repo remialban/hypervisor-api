@@ -1,9 +1,10 @@
 use sqlx::SqlitePool;
-use uuid::Uuid;
 use std::collections::HashMap;
+use uuid::Uuid;
 
 use virt::{
-    connect::Connect, domain::Domain, storage_pool::StoragePool, storage_vol::StorageVol, sys,
+    connect::Connect, domain::Domain, error::ErrorNumber, storage_pool::StoragePool,
+    storage_vol::StorageVol, sys,
 };
 
 use crate::{errors::ApiError, models::VirtualMachine, vm_xml};
@@ -27,22 +28,40 @@ pub async fn list_vms(uri: String, hypervisor_id: String) -> Result<Vec<VirtualM
         let conn = Connect::open(Some(&uri))?;
         // 0 = no filter: active and inactive domains.
         let domains = conn.list_all_domains(0)?;
-        domains
-            .iter()
-            .map(|domain| to_vm(domain, &hypervisor_id))
-            .collect()
+        let mut vms = Vec::with_capacity(domains.len());
+        for domain in &domains {
+            match to_vm(domain, &hypervisor_id) {
+                Ok(vm) => vms.push(vm),
+                // Deleted while we were listing: it is simply no longer there.
+                Err(ApiError::NotFound(_)) => {}
+                Err(e) => return Err(e),
+            }
+        }
+        Ok(vms)
     })
     .await
 }
 
 /// Reads one VM from its libvirt UUID.
-pub async fn get_vm(uri: String, hypervisor_id: String, vm_id: String) -> Result<VirtualMachine, ApiError> {
+pub async fn get_vm(
+    uri: String,
+    hypervisor_id: String,
+    vm_id: String,
+) -> Result<VirtualMachine, ApiError> {
     with_domain(uri, vm_id, move |domain| to_vm(domain, &hypervisor_id)).await
 }
 
 /// Starts a stopped VM and returns its new state.
-pub async fn start_vm(uri: String, hypervisor_id: String, vm_id: String) -> Result<VirtualMachine, ApiError> {
+pub async fn start_vm(
+    uri: String,
+    hypervisor_id: String,
+    vm_id: String,
+) -> Result<VirtualMachine, ApiError> {
     with_domain(uri, vm_id, move |domain| {
+        let (state, _) = domain.get_state()?;
+        if state != sys::VIR_DOMAIN_SHUTOFF && state != sys::VIR_DOMAIN_CRASHED {
+            return Err(ApiError::Conflict("The VM is not stopped".into()));
+        }
         domain.create()?;
         to_vm(domain, &hypervisor_id)
     })
@@ -51,8 +70,17 @@ pub async fn start_vm(uri: String, hypervisor_id: String, vm_id: String) -> Resu
 
 /// Stops a VM. `force = false` sends an ACPI shutdown request: the guest decides when
 /// to stop, so the returned state may still be `running`. `force = true` cuts the power.
-pub async fn stop_vm(uri: String, hypervisor_id: String, vm_id: String, force: bool) -> Result<VirtualMachine, ApiError> {
+pub async fn stop_vm(
+    uri: String,
+    hypervisor_id: String,
+    vm_id: String,
+    force: bool,
+) -> Result<VirtualMachine, ApiError> {
     with_domain(uri, vm_id, move |domain| {
+        let (state, _) = domain.get_state()?;
+        if state == sys::VIR_DOMAIN_SHUTOFF {
+            return Err(ApiError::Conflict("The VM is already stopped".into()));
+        }
         if force {
             domain.destroy()?;
         } else {
@@ -70,7 +98,9 @@ pub async fn delete_vm(uri: String, vm_id: String, delete_disks: bool) -> Result
     with_connection_domain(uri, vm_id, move |conn, domain| {
         let (state, _) = domain.get_state()?;
         if state != sys::VIR_DOMAIN_SHUTOFF {
-            return Err(ApiError::Conflict("The VM must be stopped before deletion".into()));
+            return Err(ApiError::Conflict(
+                "The VM must be stopped before deletion".into(),
+            ));
         }
 
         // Check everything before deleting anything.
@@ -86,7 +116,12 @@ pub async fn delete_vm(uri: String, vm_id: String, delete_disks: bool) -> Result
             }
         }
 
-        domain.undefine_flags(sys::VIR_DOMAIN_UNDEFINE_NVRAM)?;
+        // libvirt refuses to undefine a VM that has an NVRAM file unless asked to remove it.
+        if vm_xml::has_nvram(&domain.get_xml_desc(0)?)? {
+            domain.undefine_flags(sys::VIR_DOMAIN_UNDEFINE_NVRAM)?;
+        } else {
+            domain.undefine()?;
+        }
 
         for volume in &volumes {
             volume.delete(0).map_err(|e| {
@@ -103,12 +138,18 @@ pub async fn delete_vm(uri: String, vm_id: String, delete_disks: bool) -> Result
 fn ensure_not_shared(conn: &Connect, domain: &Domain, paths: &[String]) -> Result<(), ApiError> {
     let own_id = domain.get_uuid_string()?;
     for other in conn.list_all_domains(0)? {
-        if other.get_uuid_string()? == own_id {
-            continue;
-        }
-        let used = vm_xml::disk_sources(&other.get_xml_desc(0)?)?;
+        // A VM deleted while we scan the others cannot be using the disk any more.
+        let xml = match (other.get_uuid_string(), other.get_xml_desc(0)) {
+            (Ok(id), _) if id == own_id => continue,
+            (Ok(_), Ok(xml)) => xml,
+            (Err(e), _) | (_, Err(e)) if e.code() == ErrorNumber::NoDomain => continue,
+            (Err(e), _) | (_, Err(e)) => return Err(e.into()),
+        };
+        let used = vm_xml::disk_sources(&xml)?;
         if paths.iter().any(|p| used.contains(p)) {
-            return Err(ApiError::Conflict("A disk of the VM is also used by another VM".into()));
+            return Err(ApiError::Conflict(
+                "A disk of the VM is also used by another VM".into(),
+            ));
         }
     }
     Ok(())
@@ -116,15 +157,24 @@ fn ensure_not_shared(conn: &Connect, domain: &Domain, paths: &[String]) -> Resul
 
 /// Clones a stopped VM: copies its disks into the same storage pools, then defines a new
 /// (stopped) VM using the copies. Blocking and slow: it copies the whole disks.
-pub async fn clone_vm(uri: String, hypervisor_id: String, vm_id: String, new_name: String) -> Result<VirtualMachine, ApiError> {
+pub async fn clone_vm(
+    uri: String,
+    hypervisor_id: String,
+    vm_id: String,
+    new_name: String,
+) -> Result<VirtualMachine, ApiError> {
     vm_xml::validate_name(&new_name)?;
     with_connection_domain(uri, vm_id, move |conn, source| {
         let (state, _) = source.get_state()?;
         if state != sys::VIR_DOMAIN_SHUTOFF {
-            return Err(ApiError::Conflict("The source VM must be stopped before cloning".into()));
+            return Err(ApiError::Conflict(
+                "The source VM must be stopped before cloning".into(),
+            ));
         }
         if Domain::lookup_by_name(conn, &new_name).is_ok() {
-            return Err(ApiError::Conflict("A VM with this name already exists".into()));
+            return Err(ApiError::Conflict(
+                "A VM with this name already exists".into(),
+            ));
         }
         let xml = source.get_xml_desc(0)?;
 
@@ -156,8 +206,15 @@ fn copy_disks_and_define(
             ApiError::Conflict("A disk of the source VM is not in a libvirt storage pool".into())
         })?;
         let pool = StoragePool::lookup_by_volume(&source_volume)?;
-        let suffix = if index == 0 { String::new() } else { format!("-disk{index}") };
-        let volume_xml = vm_xml::new_volume_xml(&source_volume.get_xml_desc(0)?, &format!("{new_name}{suffix}.qcow2"))?;
+        let suffix = if index == 0 {
+            String::new()
+        } else {
+            format!("-disk{index}")
+        };
+        let volume_xml = vm_xml::new_volume_xml(
+            &source_volume.get_xml_desc(0)?,
+            &format!("{new_name}{suffix}.qcow2"),
+        )?;
         let copy = StorageVol::create_xml_from(&pool, &volume_xml, &source_volume, 0)?;
         copies.insert(path.clone(), copy.get_path()?);
         created.push(copy);

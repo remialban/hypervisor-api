@@ -1,7 +1,7 @@
 use axum::{
+    Json,
     http::StatusCode,
     response::{IntoResponse, Response},
-    Json,
 };
 use virt::error::ErrorNumber;
 
@@ -58,9 +58,13 @@ impl From<virt::error::Error> for ApiError {
             ErrorNumber::OperationInvalid => {
                 ApiError::Conflict("Operation not allowed in the current VM state".into())
             }
-            ErrorNumber::DomExist => ApiError::Conflict("A VM with this name or UUID already exists".into()),
+            ErrorNumber::DomExist => {
+                ApiError::Conflict("A VM with this name or UUID already exists".into())
+            }
             ErrorNumber::InvalidArg => ApiError::BadRequest("Invalid argument".into()),
-            ErrorNumber::OperationTimeout => ApiError::GatewayTimeout("The hypervisor timed out".into()),
+            ErrorNumber::OperationTimeout => {
+                ApiError::GatewayTimeout("The hypervisor timed out".into())
+            }
             ErrorNumber::NoConnect | ErrorNumber::SystemError => {
                 ApiError::BadGateway("Hypervisor unreachable".into())
             }
@@ -70,5 +74,42 @@ impl From<virt::error::Error> for ApiError {
                 ApiError::Internal("Unexpected hypervisor error".into())
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn each_variant_maps_to_its_http_status() {
+        let cases = [
+            (ApiError::NotFound("m".into()), StatusCode::NOT_FOUND),
+            (ApiError::Conflict("m".into()), StatusCode::CONFLICT),
+            (ApiError::BadRequest("m".into()), StatusCode::BAD_REQUEST),
+            (ApiError::BadGateway("m".into()), StatusCode::BAD_GATEWAY),
+            (
+                ApiError::GatewayTimeout("m".into()),
+                StatusCode::GATEWAY_TIMEOUT,
+            ),
+            (
+                ApiError::Internal("m".into()),
+                StatusCode::INTERNAL_SERVER_ERROR,
+            ),
+        ];
+        for (error, status) in cases {
+            assert_eq!(error.into_response().status(), status);
+        }
+    }
+
+    #[tokio::test]
+    async fn the_body_carries_the_message() {
+        let response = ApiError::NotFound("VM not found".into()).into_response();
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(body["status"], "error");
+        assert_eq!(body["content"], "VM not found");
     }
 }

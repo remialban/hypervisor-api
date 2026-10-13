@@ -8,13 +8,16 @@ use crate::errors::ApiError;
 pub fn validate_name(name: &str) -> Result<(), ApiError> {
     let valid = !name.is_empty()
         && name.len() <= 64
-        && name.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
         && !name.starts_with('.');
     if valid {
         Ok(())
     } else {
         Err(ApiError::BadRequest(
-            "VM name must be 1-64 characters: letters, digits, '-', '_' or '.' (not leading)".into(),
+            "VM name must be 1-64 characters: letters, digits, '-', '_' or '.' (not leading)"
+                .into(),
         ))
     }
 }
@@ -24,11 +27,23 @@ pub fn disk_sources(xml: &str) -> Result<Vec<String>, ApiError> {
     let root = parse(xml)?;
     let mut paths = Vec::new();
     for disk in disks(&root) {
-        if let Some(path) = disk.get_child("source").and_then(|s| s.attributes.get("file")) {
+        if let Some(path) = disk
+            .get_child("source")
+            .and_then(|s| s.attributes.get("file"))
+        {
             paths.push(path.clone());
         }
     }
     Ok(paths)
+}
+
+/// Whether the definition has an NVRAM element (UEFI variables stored in a file).
+pub fn has_nvram(xml: &str) -> Result<bool, ApiError> {
+    let root = parse(xml)?;
+    Ok(root
+        .get_child("os")
+        .and_then(|os| os.get_child("nvram"))
+        .is_some())
 }
 
 /// Turns the definition of a stopped VM into the definition of its clone:
@@ -47,13 +62,18 @@ pub fn clone_definition(
         .ok_or_else(|| invalid_xml("missing <name>"))?
         .children = vec![XMLNode::Text(new_name.to_string())];
 
-    if let Some(nvram) = root.get_mut_child("os").and_then(|os| os.get_mut_child("nvram")) {
+    if let Some(nvram) = root
+        .get_mut_child("os")
+        .and_then(|os| os.get_mut_child("nvram"))
+    {
         nvram.children.clear();
     }
 
     if let Some(devices) = root.get_mut_child("devices") {
         for node in devices.children.iter_mut() {
-            let XMLNode::Element(device) = node else { continue };
+            let XMLNode::Element(device) = node else {
+                continue;
+            };
             match device.name.as_str() {
                 "interface" => {
                     device.take_child("mac");
@@ -76,7 +96,8 @@ pub fn clone_definition(
     let mut out = Vec::new();
     root.write(&mut out)
         .map_err(|e| ApiError::Internal(format!("Could not write the VM definition: {e}")))?;
-    String::from_utf8(out).map_err(|_| ApiError::Internal("VM definition is not valid UTF-8".into()))
+    String::from_utf8(out)
+        .map_err(|_| ApiError::Internal("VM definition is not valid UTF-8".into()))
 }
 
 /// Definition of the volume that will receive a copy of a source volume: same format
@@ -97,7 +118,8 @@ pub fn new_volume_xml(source_volume_xml: &str, new_name: &str) -> Result<String,
     let mut out = Vec::new();
     root.write(&mut out)
         .map_err(|e| ApiError::Internal(format!("Could not write the volume definition: {e}")))?;
-    String::from_utf8(out).map_err(|_| ApiError::Internal("Volume definition is not valid UTF-8".into()))
+    String::from_utf8(out)
+        .map_err(|_| ApiError::Internal("Volume definition is not valid UTF-8".into()))
 }
 
 fn parse(xml: &str) -> Result<Element, ApiError> {
@@ -148,13 +170,26 @@ mod tests {
     }
 
     #[test]
+    fn detects_nvram() {
+        assert!(has_nvram(XML).unwrap());
+        assert!(!has_nvram("<domain><os><type>hvm</type></os></domain>").unwrap());
+        assert!(!has_nvram("<domain/>").unwrap());
+    }
+
+    #[test]
     fn lists_only_file_disks() {
-        assert_eq!(disk_sources(XML).unwrap(), vec!["/mnt/vm/a.qcow2".to_string()]);
+        assert_eq!(
+            disk_sources(XML).unwrap(),
+            vec!["/mnt/vm/a.qcow2".to_string()]
+        );
     }
 
     #[test]
     fn clone_rewrites_identity_and_disks() {
-        let disks = HashMap::from([("/mnt/vm/a.qcow2".to_string(), "/mnt/vm/clone.qcow2".to_string())]);
+        let disks = HashMap::from([(
+            "/mnt/vm/a.qcow2".to_string(),
+            "/mnt/vm/clone.qcow2".to_string(),
+        )]);
         let out = clone_definition(XML, "clone & <co>", &disks).unwrap();
         assert!(!out.contains("<uuid>"));
         assert!(!out.contains("52:54:00:6f:98:db"));
@@ -179,7 +214,13 @@ mod tests {
         assert!(out.contains("b.qcow2"));
         assert!(out.contains("53687091200"));
         assert!(out.contains("qcow2"));
-        for gone in ["<key>", "/mnt/vm/a.qcow2", "<allocation", "backingStore", "timestamps"] {
+        for gone in [
+            "<key>",
+            "/mnt/vm/a.qcow2",
+            "<allocation",
+            "backingStore",
+            "timestamps",
+        ] {
             assert!(!out.contains(gone), "{gone} should be removed");
         }
     }
