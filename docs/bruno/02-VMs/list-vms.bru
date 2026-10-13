@@ -1,0 +1,19 @@
+meta {
+  name: List VMs
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{baseUrl}}{{apiPrefix}}/hypervisors/6d53b910-f2d0-47e5-801b-fb872e71b3dd/vms
+  body: none
+  auth: none
+}
+
+assert {
+  res.status: eq 501
+}
+
+docs {
+  Planned: VirtualMachine[]. Not implemented yet: the API returns 501 {status:"not_implemented",content}. Update the assertion once libvirt is wired.
+}

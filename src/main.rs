@@ -1,10 +1,13 @@
 mod common;
 mod docs;
+mod errors;
 mod hypervisors;
 mod infrastructure;
+mod libvirt;
 mod models;
 mod routes;
 mod state;
+mod vm_xml;
 mod vms;
 mod vnc;
 

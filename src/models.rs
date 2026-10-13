@@ -35,7 +35,8 @@ pub struct CreateVm {
     pub vcpus: u16,
 }
 
-#[derive(Clone, Serialize, ToSchema, FromRow)]
+// Not stored in SQLite: built from libvirt, so no FromRow.
+#[derive(Clone, Serialize, ToSchema)]
 pub struct VirtualMachine {
     pub id: String,
     pub hypervisor_id: String,
@@ -74,4 +75,16 @@ pub struct Network {
 pub struct NetworkRequest {
     pub name: String,
     pub bridge: Option<String>,
+}
+
+#[derive(Serialize, ToSchema)]
+pub struct VncResponse {
+    pub hypervisor_id: String,
+    pub vm_id: String,
+    pub uuid: String,
+    pub host: String,
+    pub port: String,
+    pub token: String,
+    pub novnc_url: String,
+    pub status: String,
 }

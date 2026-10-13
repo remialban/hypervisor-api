@@ -1,0 +1,27 @@
+meta {
+  name: Create disk
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{baseUrl}}{{apiPrefix}}/hypervisors/{{hypervisorId}}/disks
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+    "name": "disk-01",
+    "size_gb": 20,
+    "format": "qcow2"
+  }
+}
+
+assert {
+  res.status: eq 501
+}
+
+docs {
+  Body: DiskRequest {name, size_gb (u64), format}. Planned: Disk. Not implemented yet: the API returns 501 {status:"not_implemented",content}. Update the assertion once libvirt is wired.
+}

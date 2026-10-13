@@ -1,0 +1,19 @@
+meta {
+  name: Get hypervisor - unknown id
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{baseUrl}}{{apiPrefix}}/hypervisors/{{missingId}}
+  body: none
+  auth: none
+}
+
+assert {
+  res.status: eq 404
+}
+
+docs {
+  404 -> Message {status:"error",content:"Hypervisor not found"}.
+}

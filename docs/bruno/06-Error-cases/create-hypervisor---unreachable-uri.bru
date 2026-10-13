@@ -1,0 +1,26 @@
+meta {
+  name: Create hypervisor - unreachable URI
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{baseUrl}}{{apiPrefix}}/hypervisors
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+    "name": "broken",
+    "uri": "qemu+ssh://nobody@invalid.invalid/system"
+  }
+}
+
+assert {
+  res.status: eq 502
+}
+
+docs {
+  502 -> Message {status:"error",content}.
+}

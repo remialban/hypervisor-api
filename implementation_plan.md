@@ -40,19 +40,21 @@ Les VM, disques et reseaux ne doivent pas etre stockes dans SQLite. Leur source 
 - [x] Compilation verifiee avec `cargo check`.
 - [x] Identifiants, champs, fonctions, messages et descriptions OpenAPI du code source passes en anglais.
 - [x] Workflow GitHub Actions ajoute pour verifier chaque `push` et `pull_request`.
+- [x] Type d'erreur `ApiError` (`errors.rs`) avec conversion des erreurs libvirt en codes HTTP.
+- [x] Module `libvirt.rs` : lecture de l'URI depuis SQLite, `list_vms` et `get_vm` (branches dans `vms::list` et `vms::get`).
 
 ## Reste a faire
 
 ### Priorite 1 : libvirt pour les VM
 
-- [ ] Creer un service libvirt dedie, separe des handlers HTTP.
-- [ ] Ouvrir la connexion vers l'hyperviseur selectionne depuis son URI SQLite.
-- [ ] Lister les VM avec libvirt.
-- [ ] Lire les details d'une VM.
+- [x] Creer un service libvirt dedie, separe des handlers HTTP (`libvirt.rs`, a transformer en trait pour les tests).
+- [x] Ouvrir la connexion vers l'hyperviseur selectionne depuis son URI SQLite (`hypervisor_uri` + `Connect::open`, a coordonner avec le Developpeur 1).
+- [x] Lister les VM avec libvirt (service fait, handler `vms::list` branche, teste sur qemu+ssh).
+- [x] Lire les details d'une VM (service fait, handler `vms::get` branche, teste sur qemu+ssh).
 - [ ] Creer une VM a partir d'une definition XML valide.
-- [ ] Demarrer une VM avec `Domain::create`.
-- [ ] Arreter proprement une VM avec `Domain::shutdown`.
-- [ ] Ajouter l'arret force avec `Domain::destroy` si necessaire.
+- [x] Demarrer une VM avec `Domain::create` (teste sur qemu+ssh).
+- [x] Arreter proprement une VM avec `Domain::shutdown` (asynchrone, teste).
+- [x] Ajouter l'arret force avec `Domain::destroy` (`?force=true`, teste).
 - [ ] Cloner une VM avec une nouvelle definition XML et ses disques.
 - [ ] Supprimer une VM avec confirmation explicite.
 - [ ] Ajouter des tests avec un faux service libvirt ou une couche mockable.

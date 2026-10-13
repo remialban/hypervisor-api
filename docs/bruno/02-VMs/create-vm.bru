@@ -1,0 +1,27 @@
+meta {
+  name: Create VM
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{baseUrl}}{{apiPrefix}}/hypervisors/{{hypervisorId}}/vms
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+    "name": "vm-01",
+    "memory_mb": 2048,
+    "vcpus": 2
+  }
+}
+
+assert {
+  res.status: eq 501
+}
+
+docs {
+  Body: CreateVm {name, memory_mb (u64), vcpus (u16)}. Planned: VirtualMachine. Not implemented yet: the API returns 501 {status:"not_implemented",content}. Update the assertion once libvirt is wired.
+}

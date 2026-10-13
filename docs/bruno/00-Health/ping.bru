@@ -1,0 +1,19 @@
+meta {
+  name: Ping
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{baseUrl}}/ping
+  body: none
+  auth: none
+}
+
+assert {
+  res.status: eq 200
+}
+
+docs {
+  Returns {"status":"ok","content":"pong"}. Not under the apiPrefix.
+}
