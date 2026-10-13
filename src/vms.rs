@@ -1,17 +1,27 @@
-use axum::{extract::Path, http::StatusCode, Json};
+use axum::{extract::{Path, Query, State}, http::StatusCode, Json};
+use serde::Deserialize;
+use utoipa::IntoParams;
 
-use crate::{common::not_implemented, models::{CreateVm, Message}};
+use crate::{
+    common::not_implemented,
+    errors::ApiError,
+    libvirt,
+    models::{CreateVm, Message, VirtualMachine},
+    state::SharedState,
+};
 
 type ApiResponse = (StatusCode, Json<Message>);
 
-#[utoipa::path(get, path = "/api/hypervisors/{hypervisor_id}/vms", params(("hypervisor_id" = String, Path)), responses((status = 501, body = Message)), tag = "VMs")]
-pub async fn list(Path(_hypervisor_id): Path<String>) -> ApiResponse {
-    not_implemented("VM listing will be connected to libvirt; VMs are not stored in SQLite")
+#[utoipa::path(get, path = "/api/hypervisors/{hypervisor_id}/vms", params(("hypervisor_id" = String, Path)), responses((status = 200, body = [VirtualMachine]), (status = 404, body = Message), (status = 502, body = Message)), tag = "VMs")]
+pub async fn list(State(state): State<SharedState>, Path(hypervisor_id): Path<String>) -> Result<Json<Vec<VirtualMachine>>, ApiError> {
+    let uri = libvirt::hypervisor_uri(&state.db, &hypervisor_id).await?;
+    Ok(Json(libvirt::list_vms(uri, hypervisor_id).await?))
 }
 
-#[utoipa::path(get, path = "/api/hypervisors/{hypervisor_id}/vms/{vm_id}", params(("hypervisor_id" = String, Path), ("vm_id" = String, Path)), responses((status = 501, body = Message)), tag = "VMs")]
-pub async fn get(Path((_hypervisor_id, _vm_id)): Path<(String, String)>) -> ApiResponse {
-    not_implemented("VM reading will be connected to libvirt")
+#[utoipa::path(get, path = "/api/hypervisors/{hypervisor_id}/vms/{vm_id}", params(("hypervisor_id" = String, Path), ("vm_id" = String, Path)), responses((status = 200, body = VirtualMachine), (status = 400, body = Message), (status = 404, body = Message), (status = 502, body = Message)), tag = "VMs")]
+pub async fn get(State(state): State<SharedState>, Path((hypervisor_id, vm_id)): Path<(String, String)>) -> Result<Json<VirtualMachine>, ApiError> {
+    let uri = libvirt::hypervisor_uri(&state.db, &hypervisor_id).await?;
+    Ok(Json(libvirt::get_vm(uri, hypervisor_id, vm_id).await?))
 }
 
 #[utoipa::path(post, path = "/api/hypervisors/{hypervisor_id}/vms", params(("hypervisor_id" = String, Path)), request_body = CreateVm, responses((status = 501, body = Message)), tag = "VMs")]
@@ -20,14 +30,24 @@ pub async fn create(Path(_hypervisor_id): Path<String>, Json(body): Json<CreateV
     not_implemented("VM creation will be connected to libvirt; VMs are not stored in SQLite")
 }
 
-#[utoipa::path(post, path = "/api/hypervisors/{hypervisor_id}/vms/{vm_id}/start", params(("hypervisor_id" = String, Path), ("vm_id" = String, Path)), responses((status = 501, body = Message)), tag = "VMs")]
-pub async fn start(Path((_hypervisor_id, _vm_id)): Path<(String, String)>) -> ApiResponse {
-    not_implemented("VM startup will be connected to libvirt")
+#[utoipa::path(post, path = "/api/hypervisors/{hypervisor_id}/vms/{vm_id}/start", params(("hypervisor_id" = String, Path), ("vm_id" = String, Path)), responses((status = 200, body = VirtualMachine), (status = 400, body = Message), (status = 404, body = Message), (status = 409, body = Message), (status = 502, body = Message)), tag = "VMs")]
+pub async fn start(State(state): State<SharedState>, Path((hypervisor_id, vm_id)): Path<(String, String)>) -> Result<Json<VirtualMachine>, ApiError> {
+    let uri = libvirt::hypervisor_uri(&state.db, &hypervisor_id).await?;
+    Ok(Json(libvirt::start_vm(uri, hypervisor_id, vm_id).await?))
 }
 
-#[utoipa::path(post, path = "/api/hypervisors/{hypervisor_id}/vms/{vm_id}/stop", params(("hypervisor_id" = String, Path), ("vm_id" = String, Path)), responses((status = 501, body = Message)), tag = "VMs")]
-pub async fn stop(Path((_hypervisor_id, _vm_id)): Path<(String, String)>) -> ApiResponse {
-    not_implemented("VM shutdown will be connected to libvirt")
+#[derive(Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct StopQuery {
+    /// Cut the power instead of asking the guest to shut down (default: false).
+    force: Option<bool>,
+}
+
+#[utoipa::path(post, path = "/api/hypervisors/{hypervisor_id}/vms/{vm_id}/stop", params(("hypervisor_id" = String, Path), ("vm_id" = String, Path), StopQuery), responses((status = 200, body = VirtualMachine), (status = 400, body = Message), (status = 404, body = Message), (status = 409, body = Message), (status = 502, body = Message)), tag = "VMs")]
+pub async fn stop(State(state): State<SharedState>, Path((hypervisor_id, vm_id)): Path<(String, String)>, Query(query): Query<StopQuery>) -> Result<Json<VirtualMachine>, ApiError> {
+    let uri = libvirt::hypervisor_uri(&state.db, &hypervisor_id).await?;
+    let force = query.force.unwrap_or(false);
+    Ok(Json(libvirt::stop_vm(uri, hypervisor_id, vm_id, force).await?))
 }
 
 #[utoipa::path(post, path = "/api/hypervisors/{hypervisor_id}/vms/{vm_id}/clone", params(("hypervisor_id" = String, Path), ("vm_id" = String, Path)), request_body = CreateVm, responses((status = 501, body = Message)), tag = "VMs")]
