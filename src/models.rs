@@ -35,7 +35,8 @@ pub struct CreateVm {
     pub vcpus: u16,
 }
 
-#[derive(Clone, Serialize, ToSchema, FromRow)]
+// Not stored in SQLite: built from libvirt, so no FromRow.
+#[derive(Clone, Serialize, ToSchema)]
 pub struct VirtualMachine {
     pub id: String,
     pub hypervisor_id: String,

@@ -68,7 +68,7 @@ Reponses : `204` ou `404`.
 
 ## VM
 
-Les routes VM sont exposees, mais ne stockent rien dans SQLite et repondent actuellement `501 Not Implemented`.
+Les routes VM ne stockent rien dans SQLite. `GET .../vms` et `GET .../vms/{vm_id}` lisent libvirt (`vm_id` = UUID libvirt, erreurs 400, 404 et 502). Les autres routes repondent encore `501 Not Implemented`.
 
 ```text
 GET    /api/hypervisors/{hypervisor_id}/vms

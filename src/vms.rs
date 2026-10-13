@@ -1,17 +1,25 @@
-use axum::{extract::Path, http::StatusCode, Json};
+use axum::{extract::{Path, State}, http::StatusCode, Json};
 
-use crate::{common::not_implemented, models::{CreateVm, Message}};
+use crate::{
+    common::not_implemented,
+    errors::ApiError,
+    libvirt,
+    models::{CreateVm, Message, VirtualMachine},
+    state::SharedState,
+};
 
 type ApiResponse = (StatusCode, Json<Message>);
 
-#[utoipa::path(get, path = "/api/hypervisors/{hypervisor_id}/vms", params(("hypervisor_id" = String, Path)), responses((status = 501, body = Message)), tag = "VMs")]
-pub async fn list(Path(_hypervisor_id): Path<String>) -> ApiResponse {
-    not_implemented("VM listing will be connected to libvirt; VMs are not stored in SQLite")
+#[utoipa::path(get, path = "/api/hypervisors/{hypervisor_id}/vms", params(("hypervisor_id" = String, Path)), responses((status = 200, body = [VirtualMachine]), (status = 404, body = Message), (status = 502, body = Message)), tag = "VMs")]
+pub async fn list(State(state): State<SharedState>, Path(hypervisor_id): Path<String>) -> Result<Json<Vec<VirtualMachine>>, ApiError> {
+    let uri = libvirt::hypervisor_uri(&state.db, &hypervisor_id).await?;
+    Ok(Json(libvirt::list_vms(uri, hypervisor_id).await?))
 }
 
-#[utoipa::path(get, path = "/api/hypervisors/{hypervisor_id}/vms/{vm_id}", params(("hypervisor_id" = String, Path), ("vm_id" = String, Path)), responses((status = 501, body = Message)), tag = "VMs")]
-pub async fn get(Path((_hypervisor_id, _vm_id)): Path<(String, String)>) -> ApiResponse {
-    not_implemented("VM reading will be connected to libvirt")
+#[utoipa::path(get, path = "/api/hypervisors/{hypervisor_id}/vms/{vm_id}", params(("hypervisor_id" = String, Path), ("vm_id" = String, Path)), responses((status = 200, body = VirtualMachine), (status = 400, body = Message), (status = 404, body = Message), (status = 502, body = Message)), tag = "VMs")]
+pub async fn get(State(state): State<SharedState>, Path((hypervisor_id, vm_id)): Path<(String, String)>) -> Result<Json<VirtualMachine>, ApiError> {
+    let uri = libvirt::hypervisor_uri(&state.db, &hypervisor_id).await?;
+    Ok(Json(libvirt::get_vm(uri, hypervisor_id, vm_id).await?))
 }
 
 #[utoipa::path(post, path = "/api/hypervisors/{hypervisor_id}/vms", params(("hypervisor_id" = String, Path)), request_body = CreateVm, responses((status = 501, body = Message)), tag = "VMs")]
