@@ -18,6 +18,19 @@ pub enum ApiError {
     Internal(String),
 }
 
+impl ApiError {
+    pub fn message(&self) -> &str {
+        match self {
+            ApiError::NotFound(m)
+            | ApiError::Conflict(m)
+            | ApiError::BadRequest(m)
+            | ApiError::BadGateway(m)
+            | ApiError::GatewayTimeout(m)
+            | ApiError::Internal(m) => m,
+        }
+    }
+}
+
 // Axum calls this to turn an error into an HTTP response (like @ExceptionHandler).
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {

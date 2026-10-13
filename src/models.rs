@@ -36,6 +36,11 @@ pub struct CreateVm {
 }
 
 // Not stored in SQLite: built from libvirt, so no FromRow.
+#[derive(Deserialize, ToSchema)]
+pub struct CloneVm {
+    pub name: String,
+}
+
 #[derive(Clone, Serialize, ToSchema)]
 pub struct VirtualMachine {
     pub id: String,

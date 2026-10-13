@@ -3,6 +3,7 @@ mod docs;
 mod errors;
 mod hypervisors;
 mod infrastructure;
+mod jobs;
 mod libvirt;
 mod models;
 mod routes;

@@ -41,6 +41,7 @@ Les VM, disques et reseaux ne doivent pas etre stockes dans SQLite. Leur source 
 - [x] Identifiants, champs, fonctions, messages et descriptions OpenAPI du code source passes en anglais.
 - [x] Workflow GitHub Actions ajoute pour verifier chaque `push` et `pull_request`.
 - [x] Type d'erreur `ApiError` (`errors.rs`) avec conversion des erreurs libvirt en codes HTTP.
+- [x] Jobs asynchrones en memoire (`jobs.rs`, `GET /api/jobs/{job_id}`) pour les operations longues. A faire : persistance, annulation, limite de concurrence.
 - [x] Module `libvirt.rs` : lecture de l'URI depuis SQLite, `list_vms` et `get_vm` (branches dans `vms::list` et `vms::get`).
 
 ## Reste a faire
@@ -55,8 +56,8 @@ Les VM, disques et reseaux ne doivent pas etre stockes dans SQLite. Leur source 
 - [x] Demarrer une VM avec `Domain::create` (teste sur qemu+ssh).
 - [x] Arreter proprement une VM avec `Domain::shutdown` (asynchrone, teste).
 - [x] Ajouter l'arret force avec `Domain::destroy` (`?force=true`, teste).
-- [ ] Cloner une VM avec une nouvelle definition XML et ses disques.
-- [ ] Supprimer une VM avec confirmation explicite.
+- [x] Cloner une VM avec une nouvelle definition XML et ses disques (asynchrone via `jobs.rs`, teste sur qemu+ssh).
+- [x] Supprimer une VM (`Domain::undefine_flags`, disques conserves par defaut, `?delete_disks=true` explicite, refus si disque partage, teste sur qemu+ssh).
 - [ ] Ajouter des tests avec un faux service libvirt ou une couche mockable.
 
 ### Priorite 2 : disques et reseaux libvirt

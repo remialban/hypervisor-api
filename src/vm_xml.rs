@@ -79,6 +79,27 @@ pub fn clone_definition(
     String::from_utf8(out).map_err(|_| ApiError::Internal("VM definition is not valid UTF-8".into()))
 }
 
+/// Definition of the volume that will receive a copy of a source volume: same format
+/// and capacity, but a new name and no identity (key, path) nor backing file, so the
+/// copy is a standalone full image.
+pub fn new_volume_xml(source_volume_xml: &str, new_name: &str) -> Result<String, ApiError> {
+    let mut root = parse(source_volume_xml)?;
+    for child in ["key", "allocation", "physical", "backingStore"] {
+        root.take_child(child);
+    }
+    root.get_mut_child("name")
+        .ok_or_else(|| invalid_xml("volume without <name>"))?
+        .children = vec![XMLNode::Text(new_name.to_string())];
+    if let Some(target) = root.get_mut_child("target") {
+        target.take_child("path");
+        target.take_child("timestamps");
+    }
+    let mut out = Vec::new();
+    root.write(&mut out)
+        .map_err(|e| ApiError::Internal(format!("Could not write the volume definition: {e}")))?;
+    String::from_utf8(out).map_err(|_| ApiError::Internal("Volume definition is not valid UTF-8".into()))
+}
+
 fn parse(xml: &str) -> Result<Element, ApiError> {
     Element::parse(xml.as_bytes()).map_err(|e| {
         eprintln!("Invalid domain XML: {e}");
@@ -146,6 +167,21 @@ mod tests {
         // the name is escaped, not injected as markup
         assert!(out.contains("clone &amp; &lt;co>") || out.contains("clone &amp; &lt;co&gt;"));
         assert!(!out.contains("<co>"));
+    }
+
+    #[test]
+    fn volume_copy_keeps_format_and_drops_identity() {
+        let vol = "<volume type='file'><name>a.qcow2</name><key>/mnt/vm/a.qcow2</key>
+  <capacity unit='bytes'>53687091200</capacity><allocation unit='bytes'>1</allocation>
+  <target><path>/mnt/vm/a.qcow2</path><format type='qcow2'/><timestamps><atime>1</atime></timestamps></target>
+  <backingStore><path>/base.qcow2</path></backingStore></volume>";
+        let out = new_volume_xml(vol, "b.qcow2").unwrap();
+        assert!(out.contains("b.qcow2"));
+        assert!(out.contains("53687091200"));
+        assert!(out.contains("qcow2"));
+        for gone in ["<key>", "/mnt/vm/a.qcow2", "<allocation", "backingStore", "timestamps"] {
+            assert!(!out.contains(gone), "{gone} should be removed");
+        }
     }
 
     #[test]

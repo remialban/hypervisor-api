@@ -4,8 +4,9 @@ use crate::{
     common,
     hypervisors,
     infrastructure,
+    jobs,
     models::{
-        CreateHypervisor, CreateVm, Disk, DiskRequest, Hypervisor, Message, Network,
+        CloneVm, CreateHypervisor, CreateVm, Disk, DiskRequest, Hypervisor, Message, Network,
         NetworkRequest, UpdateHypervisor, VirtualMachine, VncResponse,
     },
     vms,
@@ -40,7 +41,8 @@ use crate::{
         infrastructure::delete_disk,
         infrastructure::list_networks,
         infrastructure::create_network,
-        vnc::connect
+        vnc::connect,
+        jobs::get
     ),
     components(schemas(
         Message,
@@ -53,11 +55,15 @@ use crate::{
         DiskRequest,
         Network,
         NetworkRequest,
-        VncResponse
+        VncResponse,
+        CloneVm,
+        jobs::Job,
+        jobs::JobStatus
     )),
     tags(
         (name = "Hypervisors", description = "Hypervisor management"),
         (name = "VMs", description = "Virtual machine management"),
+        (name = "Jobs", description = "Background operations"),
         (name = "Infrastructure", description = "Disks, networks and VNC")
     )
 )]

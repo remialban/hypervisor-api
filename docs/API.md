@@ -68,7 +68,7 @@ Reponses : `204` ou `404`.
 
 ## VM
 
-Les routes VM ne stockent rien dans SQLite. `GET .../vms` et `GET .../vms/{vm_id}` lisent libvirt (`vm_id` = UUID libvirt, erreurs 400, 404 et 502). `POST .../start` et `POST .../stop` agissent sur libvirt et renvoient la VM (200) ou 409 si l'etat ne le permet pas. `stop` envoie un arret ACPI asynchrone (l'etat renvoye peut encore etre `running`) ; `?force=true` coupe immediatement l'alimentation. Les autres routes repondent encore `501 Not Implemented`.
+Les routes VM ne stockent rien dans SQLite. `GET .../vms` et `GET .../vms/{vm_id}` lisent libvirt (`vm_id` = UUID libvirt, erreurs 400, 404 et 502). `POST .../start` et `POST .../stop` agissent sur libvirt et renvoient la VM (200) ou 409 si l'etat ne le permet pas. `stop` envoie un arret ACPI asynchrone (l'etat renvoye peut encore etre `running`) ; `?force=true` coupe immediatement l'alimentation. `POST .../clone` (corps `{"name": "..."}`) est asynchrone : il repond `202` avec un job (`Location: /api/jobs/{id}`). La VM source doit etre arretee ; ses disques sont copies dans leur pool de stockage et la copie est une VM arretee avec un nouvel UUID et une nouvelle MAC. `GET /api/jobs/{job_id}` donne le statut (`running`, `succeeded` avec `result`, `failed` avec `error`) ; les jobs sont en memoire et perdus au redemarrage. `DELETE .../vms/{vm_id}` supprime une VM arretee (204 ; 409 si elle tourne) en conservant ses fichiers disque ; `?delete_disks=true` supprime aussi les volumes, sauf s'ils sont partages avec une autre VM ou hors pool (409, rien n'est supprime). Seule la creation (`POST .../vms`) repond encore `501 Not Implemented`.
 
 ```text
 GET    /api/hypervisors/{hypervisor_id}/vms
@@ -77,6 +77,7 @@ GET    /api/hypervisors/{hypervisor_id}/vms/{vm_id}
 POST   /api/hypervisors/{hypervisor_id}/vms/{vm_id}/start
 POST   /api/hypervisors/{hypervisor_id}/vms/{vm_id}/stop
 POST   /api/hypervisors/{hypervisor_id}/vms/{vm_id}/clone
+GET    /api/jobs/{job_id}
 DELETE /api/hypervisors/{hypervisor_id}/vms/{vm_id}
 ```
 

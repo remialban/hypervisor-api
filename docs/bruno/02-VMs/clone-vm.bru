@@ -12,16 +12,18 @@ post {
 
 body:json {
   {
-    "name": "vm-01-clone",
-    "memory_mb": 2048,
-    "vcpus": 2
+    "name": "vm-01-clone"
   }
 }
 
 assert {
-  res.status: eq 501
+  res.status: eq 202
+}
+
+script:post-response {
+  bru.setEnvVar("jobId", res.body.id);
 }
 
 docs {
-  Body is a CreateVm (same shape as VM creation). Not implemented yet: the API returns 501 {status:"not_implemented",content}. Update the assertion once libvirt is wired.
+  Asynchronous: returns 202 with a Job (Location: /api/jobs/{id}); the jobId variable is set for the "Get job" request. The source VM must be stopped. The copy of the disks can take minutes. Poll "Get job" until status is succeeded or failed.
 }

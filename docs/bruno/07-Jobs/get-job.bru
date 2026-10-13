@@ -1,0 +1,19 @@
+meta {
+  name: Get job
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{baseUrl}}{{apiPrefix}}/jobs/{{jobId}}
+  body: none
+  auth: none
+}
+
+assert {
+  res.status: eq 200
+}
+
+docs {
+  Status of a background operation (running, succeeded, failed). On success "result" holds the VM; on failure "error" holds the reason. Jobs are kept in memory only.
+}
