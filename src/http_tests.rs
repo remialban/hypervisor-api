@@ -1,0 +1,588 @@
+//! HTTP-level tests of the VM routes.
+//!
+//! They run the real router and the real libvirt code against libvirt's in-memory
+//! `test:///default` driver: no SSH, no daemon, nothing touches a real hypervisor.
+//! That driver keeps one global state per process, shared by every test, so each test
+//! defines its own VMs and volumes under unique names and never relies on the VM
+//! that libvirt provides by default.
+
+use std::{sync::Arc, time::Duration};
+
+use axum::{
+    Router,
+    body::Body,
+    http::{Method, Request, StatusCode, header},
+};
+use serde_json::{Value, json};
+use tower::ServiceExt;
+use uuid::Uuid;
+use virt::{connect::Connect, domain::Domain, storage_pool::StoragePool, storage_vol::StorageVol};
+
+use crate::{routes, state::AppState};
+
+const POOL: &str = "default-pool";
+
+// ---------- HTTP helpers ----------
+
+struct TestApp {
+    router: Router,
+    hypervisor_id: String,
+}
+
+impl TestApp {
+    /// A fresh API with its own in-memory SQLite and one hypervisor using the test driver.
+    async fn new() -> Self {
+        let db_url = format!(
+            "sqlite:file:{}?mode=memory&cache=shared",
+            Uuid::new_v4().simple()
+        );
+        let state = Arc::new(AppState::new(&db_url).await.expect("in-memory SQLite"));
+        let hypervisor_id = Uuid::new_v4().to_string();
+        sqlx::query("INSERT INTO hypervisors (id, name, uri, status) VALUES (?, 'test', 'test:///default', 'connected')")
+            .bind(&hypervisor_id)
+            .execute(&state.db)
+            .await
+            .unwrap();
+        Self {
+            router: routes::create_routes(state),
+            hypervisor_id,
+        }
+    }
+
+    async fn send(
+        &self,
+        method: Method,
+        path: &str,
+        body: Option<Value>,
+    ) -> (StatusCode, header::HeaderMap, Value) {
+        let mut request = Request::builder().method(method).uri(path);
+        let body = match body {
+            Some(json) => {
+                request = request.header(header::CONTENT_TYPE, "application/json");
+                Body::from(json.to_string())
+            }
+            None => Body::empty(),
+        };
+        let response = self
+            .router
+            .clone()
+            .oneshot(request.body(body).unwrap())
+            .await
+            .unwrap();
+        let (parts, body) = response.into_parts();
+        let bytes = axum::body::to_bytes(body, usize::MAX).await.unwrap();
+        let json = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+        (parts.status, parts.headers, json)
+    }
+
+    fn vms(&self) -> String {
+        format!("/api/hypervisors/{}/vms", self.hypervisor_id)
+    }
+
+    fn vm(&self, vm_id: &str) -> String {
+        format!("{}/{vm_id}", self.vms())
+    }
+
+    async fn status_of(&self, method: Method, path: &str) -> (StatusCode, Value) {
+        let (status, _, json) = self.send(method, path, None).await;
+        (status, json)
+    }
+
+    /// Waits for a job to leave the `running` state and returns it.
+    async fn wait_job(&self, job_id: &str) -> Value {
+        for _ in 0..200 {
+            let (status, job) = self
+                .status_of(Method::GET, &format!("/api/jobs/{job_id}"))
+                .await;
+            assert_eq!(status, StatusCode::OK);
+            if job["status"] != "running" {
+                return job;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        panic!("job {job_id} did not finish");
+    }
+
+    /// Asks for a clone and waits for the job to finish.
+    async fn clone_vm(&self, vm_id: &str, name: &str) -> Value {
+        let (status, _, job) = self
+            .send(
+                Method::POST,
+                &format!("{}/clone", self.vm(vm_id)),
+                Some(json!({ "name": name })),
+            )
+            .await;
+        assert_eq!(status, StatusCode::ACCEPTED);
+        self.wait_job(job["id"].as_str().unwrap()).await
+    }
+}
+
+// ---------- libvirt fixtures (direct calls on the test driver) ----------
+
+fn unique(prefix: &str) -> String {
+    format!("{prefix}-{}", &Uuid::new_v4().simple().to_string()[..8])
+}
+
+fn connect() -> Connect {
+    Connect::open(Some("test:///default")).unwrap()
+}
+
+/// Creates a volume in the test pool and returns its path.
+fn create_volume(name: &str) -> String {
+    let conn = connect();
+    let pool = StoragePool::lookup_by_name(&conn, POOL).unwrap();
+    let xml = format!(
+        "<volume><name>{name}</name><capacity unit='MiB'>1</capacity><target><format type='raw'/></target></volume>"
+    );
+    StorageVol::create_xml(&pool, &xml, 0)
+        .unwrap()
+        .get_path()
+        .unwrap()
+}
+
+fn volume_exists(path: &str) -> bool {
+    StorageVol::lookup_by_path(&connect(), path).is_ok()
+}
+
+/// Defines a stopped VM with the given disk files and returns its UUID.
+fn define_vm(name: &str, disks: &[&str]) -> String {
+    let disks: String = disks
+        .iter()
+        .enumerate()
+        .map(|(i, path)| format!("<disk type='file' device='disk'><source file='{path}'/><target dev='vd{}'/></disk>", (b'a' + i as u8) as char))
+        .collect();
+    let xml = format!(
+        "<domain type='test'><name>{name}</name><memory unit='MiB'>64</memory><vcpu>1</vcpu><os><type>hvm</type></os><devices>{disks}</devices></domain>"
+    );
+    let conn = connect();
+    Domain::define_xml(&conn, &xml)
+        .unwrap()
+        .get_uuid_string()
+        .unwrap()
+}
+
+// ---------- list / get ----------
+
+#[tokio::test]
+async fn list_contains_a_defined_vm() {
+    let app = TestApp::new().await;
+    let name = unique("list");
+    let id = define_vm(&name, &[]);
+
+    let (status, vms) = app.status_of(Method::GET, &app.vms()).await;
+
+    assert_eq!(status, StatusCode::OK);
+    let vm = vms
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|vm| vm["id"] == id)
+        .expect("VM listed");
+    assert_eq!(vm["name"], name);
+    assert_eq!(vm["status"], "stopped");
+    assert_eq!(vm["memory_mb"], 64);
+    assert_eq!(vm["vcpus"], 1);
+    assert_eq!(vm["hypervisor_id"], app.hypervisor_id);
+}
+
+#[tokio::test]
+async fn get_returns_one_vm() {
+    let app = TestApp::new().await;
+    let id = define_vm(&unique("get"), &[]);
+
+    let (status, vm) = app.status_of(Method::GET, &app.vm(&id)).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(vm["id"], id);
+}
+
+#[tokio::test]
+async fn get_rejects_a_malformed_vm_id() {
+    let app = TestApp::new().await;
+    let (status, body) = app.status_of(Method::GET, &app.vm("not-a-uuid")).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["status"], "error");
+}
+
+#[tokio::test]
+async fn get_unknown_vm_is_404() {
+    let app = TestApp::new().await;
+    let (status, _) = app
+        .status_of(Method::GET, &app.vm(&Uuid::new_v4().to_string()))
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn unknown_hypervisor_is_404_on_every_vm_route() {
+    let app = TestApp::new().await;
+    let vm = Uuid::new_v4();
+    let base = "/api/hypervisors/unknown/vms";
+    for (method, path) in [
+        (Method::GET, base.to_string()),
+        (Method::GET, format!("{base}/{vm}")),
+        (Method::POST, format!("{base}/{vm}/start")),
+        (Method::POST, format!("{base}/{vm}/stop")),
+        (Method::DELETE, format!("{base}/{vm}")),
+    ] {
+        let (status, body) = app.status_of(method.clone(), &path).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{method} {path}");
+        assert_eq!(body["content"], "Hypervisor not found");
+    }
+}
+
+// ---------- start / stop ----------
+
+#[tokio::test]
+async fn start_then_stop_a_vm() {
+    let app = TestApp::new().await;
+    let id = define_vm(&unique("power"), &[]);
+
+    let (status, vm) = app
+        .status_of(Method::POST, &format!("{}/start", app.vm(&id)))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(vm["status"], "running");
+
+    let (status, vm) = app
+        .status_of(Method::POST, &format!("{}/stop?force=true", app.vm(&id)))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(vm["status"], "stopped");
+
+    let (_, vm) = app.status_of(Method::GET, &app.vm(&id)).await;
+    assert_eq!(vm["status"], "stopped");
+}
+
+#[tokio::test]
+async fn graceful_stop_is_accepted_on_a_running_vm() {
+    let app = TestApp::new().await;
+    let id = define_vm(&unique("graceful"), &[]);
+    app.status_of(Method::POST, &format!("{}/start", app.vm(&id)))
+        .await;
+
+    let (status, _) = app
+        .status_of(Method::POST, &format!("{}/stop", app.vm(&id)))
+        .await;
+
+    assert_eq!(status, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn starting_a_running_vm_is_a_conflict() {
+    let app = TestApp::new().await;
+    let id = define_vm(&unique("twice"), &[]);
+    let start = format!("{}/start", app.vm(&id));
+    app.status_of(Method::POST, &start).await;
+
+    let (status, body) = app.status_of(Method::POST, &start).await;
+
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(body["status"], "error");
+}
+
+#[tokio::test]
+async fn stopping_a_stopped_vm_is_a_conflict() {
+    let app = TestApp::new().await;
+    let id = define_vm(&unique("stopped"), &[]);
+    for suffix in ["stop", "stop?force=true"] {
+        let (status, _) = app
+            .status_of(Method::POST, &format!("{}/{suffix}", app.vm(&id)))
+            .await;
+        assert_eq!(status, StatusCode::CONFLICT, "{suffix}");
+    }
+}
+
+#[tokio::test]
+async fn power_actions_on_unknown_or_malformed_ids() {
+    let app = TestApp::new().await;
+    let unknown = Uuid::new_v4().to_string();
+    for action in ["start", "stop"] {
+        let (status, _) = app
+            .status_of(Method::POST, &format!("{}/{action}", app.vm(&unknown)))
+            .await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{action} unknown");
+        let (status, _) = app
+            .status_of(Method::POST, &format!("{}/{action}", app.vm("nope")))
+            .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{action} malformed");
+    }
+}
+
+#[tokio::test]
+async fn stop_rejects_a_bad_force_value() {
+    let app = TestApp::new().await;
+    let id = define_vm(&unique("badforce"), &[]);
+    let (status, _) = app
+        .status_of(Method::POST, &format!("{}/stop?force=maybe", app.vm(&id)))
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+// ---------- delete ----------
+
+#[tokio::test]
+async fn delete_removes_the_vm_but_keeps_its_disk_by_default() {
+    let app = TestApp::new().await;
+    let disk = create_volume(&format!("{}.img", unique("keep")));
+    let id = define_vm(&unique("del"), &[&disk]);
+
+    let (status, _) = app.status_of(Method::DELETE, &app.vm(&id)).await;
+
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert_eq!(
+        app.status_of(Method::GET, &app.vm(&id)).await.0,
+        StatusCode::NOT_FOUND
+    );
+    assert!(volume_exists(&disk), "the disk must be kept");
+}
+
+#[tokio::test]
+async fn delete_with_delete_disks_removes_the_disk_too() {
+    let app = TestApp::new().await;
+    let disk = create_volume(&format!("{}.img", unique("gone")));
+    let id = define_vm(&unique("deldisk"), &[&disk]);
+
+    let (status, _) = app
+        .status_of(
+            Method::DELETE,
+            &format!("{}?delete_disks=true", app.vm(&id)),
+        )
+        .await;
+
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert!(!volume_exists(&disk), "the disk must be deleted");
+}
+
+#[tokio::test]
+async fn delete_of_a_running_vm_is_refused() {
+    let app = TestApp::new().await;
+    let id = define_vm(&unique("busy"), &[]);
+    app.status_of(Method::POST, &format!("{}/start", app.vm(&id)))
+        .await;
+
+    let (status, _) = app.status_of(Method::DELETE, &app.vm(&id)).await;
+
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(
+        app.status_of(Method::GET, &app.vm(&id)).await.0,
+        StatusCode::OK
+    );
+}
+
+#[tokio::test]
+async fn delete_disks_is_refused_when_another_vm_uses_the_disk() {
+    let app = TestApp::new().await;
+    let disk = create_volume(&format!("{}.img", unique("shared")));
+    let first = define_vm(&unique("owner1"), &[&disk]);
+    let second = define_vm(&unique("owner2"), &[&disk]);
+
+    let (status, _) = app
+        .status_of(
+            Method::DELETE,
+            &format!("{}?delete_disks=true", app.vm(&first)),
+        )
+        .await;
+
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(
+        app.status_of(Method::GET, &app.vm(&first)).await.0,
+        StatusCode::OK,
+        "nothing deleted"
+    );
+    assert!(volume_exists(&disk));
+    // Without delete_disks the same deletion is fine, and the other VM keeps its disk.
+    assert_eq!(
+        app.status_of(Method::DELETE, &app.vm(&first)).await.0,
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        app.status_of(Method::GET, &app.vm(&second)).await.0,
+        StatusCode::OK
+    );
+    assert!(volume_exists(&disk));
+}
+
+#[tokio::test]
+async fn delete_disks_is_refused_for_a_disk_outside_any_pool() {
+    let app = TestApp::new().await;
+    let in_pool = create_volume(&format!("{}.img", unique("pooled")));
+    let id = define_vm(&unique("outside"), &[&in_pool, "/nowhere/disk.img"]);
+
+    let (status, _) = app
+        .status_of(
+            Method::DELETE,
+            &format!("{}?delete_disks=true", app.vm(&id)),
+        )
+        .await;
+
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(
+        app.status_of(Method::GET, &app.vm(&id)).await.0,
+        StatusCode::OK
+    );
+    assert!(
+        volume_exists(&in_pool),
+        "the pooled disk must not be deleted either"
+    );
+}
+
+#[tokio::test]
+async fn delete_unknown_vm_is_404() {
+    let app = TestApp::new().await;
+    let (status, _) = app
+        .status_of(Method::DELETE, &app.vm(&Uuid::new_v4().to_string()))
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+// ---------- clone (asynchronous) ----------
+
+#[tokio::test]
+async fn clone_answers_202_with_a_location_and_a_job() {
+    let app = TestApp::new().await;
+    let id = define_vm(&unique("src"), &[]);
+
+    let (status, headers, job) = app
+        .send(
+            Method::POST,
+            &format!("{}/clone", app.vm(&id)),
+            Some(json!({ "name": unique("c") })),
+        )
+        .await;
+
+    assert_eq!(status, StatusCode::ACCEPTED);
+    assert_eq!(job["kind"], "clone");
+    let job_id = job["id"].as_str().unwrap();
+    assert_eq!(
+        headers[header::LOCATION],
+        format!("/api/jobs/{job_id}").as_str()
+    );
+    app.wait_job(job_id).await;
+}
+
+#[tokio::test]
+async fn clone_copies_the_vm_and_its_disk() {
+    let app = TestApp::new().await;
+    let disk = create_volume(&format!("{}.img", unique("srcdisk")));
+    let source = define_vm(&unique("src"), &[&disk]);
+    let name = unique("clone");
+
+    let job = app.clone_vm(&source, &name).await;
+
+    assert_eq!(job["status"], "succeeded", "{job}");
+    let clone = &job["result"];
+    assert_eq!(clone["name"], name);
+    assert_eq!(clone["status"], "stopped");
+    assert_ne!(clone["id"], source, "the clone has its own UUID");
+    // The clone is a real VM, with its own disk copy next to the original one.
+    assert_eq!(
+        app.status_of(Method::GET, &app.vm(clone["id"].as_str().unwrap()))
+            .await
+            .0,
+        StatusCode::OK
+    );
+    let copy = format!("/{POOL}/{name}.qcow2");
+    assert!(volume_exists(&copy));
+    assert!(volume_exists(&disk), "the source disk is untouched");
+
+    // And deleting the clone with its disks leaves the source alone.
+    let clone_id = clone["id"].as_str().unwrap();
+    let (status, _) = app
+        .status_of(
+            Method::DELETE,
+            &format!("{}?delete_disks=true", app.vm(clone_id)),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert!(!volume_exists(&copy));
+    assert!(volume_exists(&disk));
+    assert_eq!(
+        app.status_of(Method::GET, &app.vm(&source)).await.0,
+        StatusCode::OK
+    );
+}
+
+#[tokio::test]
+async fn clone_of_a_running_vm_fails() {
+    let app = TestApp::new().await;
+    let source = define_vm(&unique("running"), &[]);
+    app.status_of(Method::POST, &format!("{}/start", app.vm(&source)))
+        .await;
+    let name = unique("clone");
+
+    let job = app.clone_vm(&source, &name).await;
+
+    assert_eq!(job["status"], "failed");
+    assert_eq!(job["error"], "The source VM must be stopped before cloning");
+    assert!(job["result"].is_null());
+}
+
+#[tokio::test]
+async fn clone_with_an_existing_name_fails() {
+    let app = TestApp::new().await;
+    let source = define_vm(&unique("src"), &[]);
+    let taken = unique("taken");
+    define_vm(&taken, &[]);
+
+    let job = app.clone_vm(&source, &taken).await;
+
+    assert_eq!(job["status"], "failed");
+    assert_eq!(job["error"], "A VM with this name already exists");
+}
+
+#[tokio::test]
+async fn failed_clone_removes_the_disks_it_already_copied() {
+    let app = TestApp::new().await;
+    let pooled = create_volume(&format!("{}.img", unique("pooled")));
+    // The second disk cannot be copied: the first copy must be rolled back.
+    let source = define_vm(&unique("src"), &[&pooled, "/nowhere/disk.img"]);
+    let name = unique("clone");
+
+    let job = app.clone_vm(&source, &name).await;
+
+    assert_eq!(job["status"], "failed");
+    assert!(
+        !volume_exists(&format!("/{POOL}/{name}.qcow2")),
+        "partial copy left behind"
+    );
+    let (_, vms) = app.status_of(Method::GET, &app.vms()).await;
+    assert!(
+        vms.as_array().unwrap().iter().all(|vm| vm["name"] != name),
+        "no VM was defined"
+    );
+}
+
+#[tokio::test]
+async fn clone_rejects_bad_requests_immediately() {
+    let app = TestApp::new().await;
+    let id = define_vm(&unique("src"), &[]);
+    let clone = |vm: &str| format!("{}/clone", app.vm(vm));
+
+    for name in ["../evil", "", "with space", ".hidden"] {
+        let (status, _, _) = app
+            .send(Method::POST, &clone(&id), Some(json!({ "name": name })))
+            .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "name {name:?}");
+    }
+    let (status, _, _) = app
+        .send(
+            Method::POST,
+            &clone("not-a-uuid"),
+            Some(json!({ "name": "ok" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let (status, _, _) = app.send(Method::POST, &clone(&id), Some(json!({}))).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "missing name");
+}
+
+// ---------- jobs ----------
+
+#[tokio::test]
+async fn unknown_job_is_404() {
+    let app = TestApp::new().await;
+    let (status, body) = app.status_of(Method::GET, "/api/jobs/does-not-exist").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["content"], "Job not found");
+}
