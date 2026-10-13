@@ -1,0 +1,19 @@
+meta {
+  name: Get VM creation options
+  type: http
+  seq: 8
+}
+
+get {
+  url: {{baseUrl}}{{apiPrefix}}/hypervisors/{{hypervisorId}}/vm-options
+  body: none
+  auth: none
+}
+
+assert {
+  res.status: eq 200
+}
+
+docs {
+  What a client may choose to create a VM: active storage pools with their volumes (kind disk or iso, used_by = VMs already using a disk), active networks, firmware choices, limits and defaults. Read live from libvirt.
+}

@@ -9,7 +9,7 @@ use crate::{
         CloneVm, CreateHypervisor, CreateVm, Disk, DiskRequest, Hypervisor, Message, Network,
         NetworkRequest, UpdateHypervisor, VirtualMachine, VncResponse,
     },
-    vms,
+    vm_options, vms,
     vnc,
 };
 
@@ -42,7 +42,8 @@ use crate::{
         infrastructure::list_networks,
         infrastructure::create_network,
         vnc::connect,
-        jobs::get
+        jobs::get,
+        vm_options::get
     ),
     components(schemas(
         Message,
@@ -58,7 +59,15 @@ use crate::{
         VncResponse,
         CloneVm,
         jobs::Job,
-        jobs::JobStatus
+        jobs::JobStatus,
+        vm_options::VmOptions,
+        vm_options::PoolOption,
+        vm_options::VolumeOption,
+        vm_options::VolumeKind,
+        vm_options::NetworkOption,
+        vm_options::Range,
+        vm_options::Limits,
+        vm_options::Defaults
     )),
     tags(
         (name = "Hypervisors", description = "Hypervisor management"),

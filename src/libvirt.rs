@@ -7,7 +7,14 @@ use virt::{
     storage_vol::StorageVol, sys,
 };
 
-use crate::{errors::ApiError, models::VirtualMachine, vm_xml};
+use crate::{
+    errors::ApiError,
+    models::VirtualMachine,
+    vm_options::{
+        self, Defaults, Limits, NetworkOption, PoolOption, VmOptions, VolumeKind, VolumeOption,
+    },
+    vm_xml,
+};
 
 /// Reads the libvirt URI of a hypervisor from SQLite.
 pub async fn hypervisor_uri(db: &SqlitePool, hypervisor_id: &str) -> Result<String, ApiError> {
@@ -40,6 +47,134 @@ pub async fn list_vms(uri: String, hypervisor_id: String) -> Result<Vec<VirtualM
         Ok(vms)
     })
     .await
+}
+
+const GIB: u64 = 1024 * 1024 * 1024;
+const MIB: u64 = 1024 * 1024;
+
+/// Everything a client may choose when creating a VM: pools, volumes, networks, limits.
+pub async fn vm_options(uri: String) -> Result<VmOptions, ApiError> {
+    run_blocking(move || {
+        let conn = Connect::open(Some(&uri))?;
+        let used_by = disks_in_use(&conn)?;
+
+        let mut storage_pools = Vec::new();
+        for pool in conn.list_all_storage_pools(sys::VIR_CONNECT_LIST_STORAGE_POOLS_ACTIVE)? {
+            // A pool removed while we read it is simply skipped.
+            match pool_option(&pool, &used_by) {
+                Ok(option) => storage_pools.push(option),
+                Err(ApiError::NotFound(_)) => {}
+                Err(e) => return Err(e),
+            }
+        }
+        storage_pools.sort_by(|a, b| a.name.cmp(&b.name));
+
+        let mut networks = Vec::new();
+        for network in conn.list_all_networks(sys::VIR_CONNECT_LIST_NETWORKS_ACTIVE)? {
+            networks.push(NetworkOption {
+                name: network.get_name()?,
+                bridge: network.get_bridge_name().ok(),
+                forward_mode: vm_xml::network_forward_mode(&network.get_xml_desc(0)?)?,
+            });
+        }
+        networks.sort_by(|a, b| a.name.cmp(&b.name));
+
+        Ok(VmOptions {
+            storage_pools,
+            networks,
+            firmware: vm_options::FIRMWARES
+                .iter()
+                .map(|f| f.to_string())
+                .collect(),
+            limits: Limits::default(),
+            defaults: Defaults::default(),
+        })
+    })
+    .await
+}
+
+/// Disk file path -> names of the VMs using it.
+fn disks_in_use(conn: &Connect) -> Result<HashMap<String, Vec<String>>, ApiError> {
+    let mut used: HashMap<String, Vec<String>> = HashMap::new();
+    for domain in conn.list_all_domains(0)? {
+        let (name, xml) = match (domain.get_name(), domain.get_xml_desc(0)) {
+            (Ok(name), Ok(xml)) => (name, xml),
+            (Err(e), _) | (_, Err(e)) if e.code() == ErrorNumber::NoDomain => continue,
+            (Err(e), _) | (_, Err(e)) => return Err(e.into()),
+        };
+        for path in vm_xml::disk_sources(&xml)? {
+            used.entry(path).or_default().push(name.clone());
+        }
+    }
+    Ok(used)
+}
+
+fn pool_option(
+    pool: &StoragePool,
+    used_by: &HashMap<String, Vec<String>>,
+) -> Result<PoolOption, ApiError> {
+    let info = pool.get_info()?;
+    let volumes = pool.list_all_volumes(0)?;
+    let truncated = volumes.len() > vm_options::MAX_VOLUMES_PER_POOL;
+
+    let mut options = Vec::new();
+    for volume in volumes.iter().take(vm_options::MAX_VOLUMES_PER_POOL) {
+        match volume_option(volume, used_by) {
+            Ok(Some(option)) => options.push(option),
+            // Directories, or a volume deleted while we read the pool.
+            Ok(None) => {}
+            Err(ApiError::NotFound(_)) => {}
+            Err(e) => return Err(e),
+        }
+    }
+    options.sort_by(|a, b| a.name.cmp(&b.name));
+
+    Ok(PoolOption {
+        name: pool.get_name()?,
+        capacity_gb: info.capacity / GIB,
+        available_gb: info.available / GIB,
+        volumes: options,
+        truncated,
+    })
+}
+
+/// `None` for entries that are not files or block devices (directories, for instance).
+fn volume_option(
+    volume: &StorageVol,
+    used_by: &HashMap<String, Vec<String>>,
+) -> Result<Option<VolumeOption>, ApiError> {
+    let info = volume.get_info().map_err(volume_error)?;
+    if info.kind != sys::VIR_STORAGE_VOL_FILE && info.kind != sys::VIR_STORAGE_VOL_BLOCK {
+        return Ok(None);
+    }
+    let name = volume.get_name().map_err(volume_error)?;
+    let format = vm_xml::volume_format(&volume.get_xml_desc(0).map_err(volume_error)?)?;
+    let is_iso = format == "iso" || name.to_lowercase().ends_with(".iso");
+    let path = volume.get_path().map_err(volume_error)?;
+    Ok(Some(VolumeOption {
+        name,
+        format,
+        size_mb: info.capacity / MIB,
+        kind: if is_iso {
+            VolumeKind::Iso
+        } else {
+            VolumeKind::Disk
+        },
+        used_by: if is_iso {
+            Vec::new()
+        } else {
+            used_by.get(&path).cloned().unwrap_or_default()
+        },
+    }))
+}
+
+/// A volume that disappeared is reported as NotFound so callers can skip it.
+fn volume_error(e: virt::error::Error) -> ApiError {
+    if e.code() == ErrorNumber::NoStorageVolume {
+        ApiError::NotFound("Volume not found".into())
+    } else {
+        e.into()
+    }
 }
 
 /// Reads one VM from its libvirt UUID.

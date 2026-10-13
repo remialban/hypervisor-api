@@ -46,6 +46,29 @@ pub fn has_nvram(xml: &str) -> Result<bool, ApiError> {
         .is_some())
 }
 
+/// Format of a volume (`qcow2`, `raw`, `iso`...) from its definition, `unknown` if absent.
+pub fn volume_format(volume_xml: &str) -> Result<String, ApiError> {
+    let root = parse(volume_xml)?;
+    Ok(root
+        .get_child("target")
+        .and_then(|target| target.get_child("format"))
+        .and_then(|format| format.attributes.get("type"))
+        .cloned()
+        .unwrap_or_else(|| "unknown".into()))
+}
+
+/// Forward mode (`nat`, `route`...) of a network definition, `None` for an isolated one.
+pub fn network_forward_mode(network_xml: &str) -> Result<Option<String>, ApiError> {
+    let root = parse(network_xml)?;
+    Ok(root.get_child("forward").map(|forward| {
+        forward
+            .attributes
+            .get("mode")
+            .cloned()
+            .unwrap_or_else(|| "nat".into())
+    }))
+}
+
 /// Turns the definition of a stopped VM into the definition of its clone:
 /// new name, no UUID or MAC address (libvirt generates them), no NVRAM path
 /// (libvirt builds one from the name) and the disks replaced via `new_disks`
@@ -167,6 +190,23 @@ mod tests {
         for bad in ["", ".hidden", "a/b", "../x", "a b", "é", &"a".repeat(65)] {
             assert!(validate_name(bad).is_err(), "{bad:?} should be rejected");
         }
+    }
+
+    #[test]
+    fn reads_volume_format_and_network_forward_mode() {
+        let vol = "<volume><target><format type='qcow2'/></target></volume>";
+        assert_eq!(volume_format(vol).unwrap(), "qcow2");
+        assert_eq!(volume_format("<volume/>").unwrap(), "unknown");
+
+        let nat = "<network><forward mode='nat'/></network>";
+        assert_eq!(network_forward_mode(nat).unwrap().as_deref(), Some("nat"));
+        assert_eq!(
+            network_forward_mode("<network><forward/></network>")
+                .unwrap()
+                .as_deref(),
+            Some("nat")
+        );
+        assert_eq!(network_forward_mode("<network/>").unwrap(), None);
     }
 
     #[test]

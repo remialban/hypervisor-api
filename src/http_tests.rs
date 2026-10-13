@@ -586,3 +586,89 @@ async fn unknown_job_is_404() {
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert_eq!(body["content"], "Job not found");
 }
+
+// ---------- vm-options ----------
+
+#[tokio::test]
+async fn vm_options_lists_pools_volumes_networks_and_limits() {
+    let app = TestApp::new().await;
+    let disk_name = format!("{}.img", unique("optdisk"));
+    let iso_name = format!("{}.iso", unique("optiso"));
+    let disk = create_volume(&disk_name);
+    create_volume(&iso_name);
+
+    let (status, options) = app
+        .status_of(
+            Method::GET,
+            &format!("/api/hypervisors/{}/vm-options", app.hypervisor_id),
+        )
+        .await;
+
+    assert_eq!(status, StatusCode::OK);
+    let pool = options["storage_pools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["name"] == POOL)
+        .expect("the test pool is listed");
+    assert_eq!(pool["truncated"], false);
+    let volumes = pool["volumes"].as_array().unwrap();
+    let find = |name: &str| {
+        volumes
+            .iter()
+            .find(|v| v["name"] == name)
+            .expect("volume listed")
+    };
+    assert_eq!(find(&disk_name)["kind"], "disk");
+    assert_eq!(find(&disk_name)["format"], "raw");
+    assert_eq!(find(&disk_name)["used_by"], json!([]));
+    assert_eq!(find(&iso_name)["kind"], "iso");
+
+    assert!(
+        options["networks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|n| n["name"] == "default"),
+        "the default network is listed"
+    );
+    assert_eq!(options["firmware"], json!(["bios", "uefi"]));
+    assert_eq!(options["limits"]["memory_mb"]["min"], 64);
+    assert_eq!(options["limits"]["disk_gb"]["max"], 2048);
+    assert_eq!(options["defaults"]["network"], "default");
+    assert!(!disk.is_empty());
+}
+
+#[tokio::test]
+async fn vm_options_tells_which_vms_use_a_disk() {
+    let app = TestApp::new().await;
+    let disk_name = format!("{}.img", unique("taken"));
+    let disk = create_volume(&disk_name);
+    let vm_name = unique("user");
+    define_vm(&vm_name, &[&disk]);
+
+    let (_, options) = app
+        .status_of(
+            Method::GET,
+            &format!("/api/hypervisors/{}/vm-options", app.hypervisor_id),
+        )
+        .await;
+
+    let volume = options["storage_pools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|p| p["volumes"].as_array().unwrap())
+        .find(|v| v["name"] == disk_name)
+        .expect("volume listed");
+    assert_eq!(volume["used_by"], json!([vm_name]));
+}
+
+#[tokio::test]
+async fn vm_options_of_an_unknown_hypervisor_is_404() {
+    let app = TestApp::new().await;
+    let (status, _) = app
+        .status_of(Method::GET, "/api/hypervisors/unknown/vm-options")
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}

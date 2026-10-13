@@ -10,6 +10,7 @@ mod libvirt;
 mod models;
 mod routes;
 mod state;
+mod vm_options;
 mod vm_xml;
 mod vms;
 mod vnc;
