@@ -1,0 +1,19 @@
+meta {
+  name: Delete hypervisor
+  type: http
+  seq: 5
+}
+
+delete {
+  url: {{baseUrl}}{{apiPrefix}}/hypervisors/{{hypervisorId}}
+  body: none
+  auth: none
+}
+
+assert {
+  res.status: eq 204
+}
+
+docs {
+  204 no body. 404 -> Message if unknown id. Run last: it removes the hypervisor used by the other folders.
+}

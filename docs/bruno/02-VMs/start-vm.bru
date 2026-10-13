@@ -1,0 +1,19 @@
+meta {
+  name: Start VM
+  type: http
+  seq: 4
+}
+
+post {
+  url: {{baseUrl}}{{apiPrefix}}/hypervisors/{{hypervisorId}}/vms/{{vmId}}/start
+  body: none
+  auth: none
+}
+
+assert {
+  res.status: eq 501
+}
+
+docs {
+  Not implemented yet: the API returns 501 {status:"not_implemented",content}. Update the assertion once libvirt is wired.
+}

@@ -1,0 +1,27 @@
+meta {
+  name: Update disk
+  type: http
+  seq: 4
+}
+
+patch {
+  url: {{baseUrl}}{{apiPrefix}}/hypervisors/{{hypervisorId}}/disks/{{diskId}}
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+    "name": "disk-01",
+    "size_gb": 40,
+    "format": "qcow2"
+  }
+}
+
+assert {
+  res.status: eq 501
+}
+
+docs {
+  Body reuses DiskRequest: all three fields are required (no partial PATCH in the code today). Not implemented yet: the API returns 501 {status:"not_implemented",content}. Update the assertion once libvirt is wired.
+}

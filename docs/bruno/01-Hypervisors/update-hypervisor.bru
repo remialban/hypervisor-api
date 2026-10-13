@@ -1,0 +1,26 @@
+meta {
+  name: Update hypervisor
+  type: http
+  seq: 4
+}
+
+patch {
+  url: {{baseUrl}}{{apiPrefix}}/hypervisors/{{hypervisorId}}
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+    "name": "local-test-renamed",
+    "uri": "{{libvirtUri}}"
+  }
+}
+
+assert {
+  res.status: eq 200
+}
+
+docs {
+  Both fields are optional (send only what changes). A new uri is tested first: 502 if unreachable. 404 if unknown id.
+}

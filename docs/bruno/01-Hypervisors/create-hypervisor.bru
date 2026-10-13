@@ -1,0 +1,30 @@
+meta {
+  name: Create hypervisor
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{baseUrl}}{{apiPrefix}}/hypervisors
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+    "name": "local-test",
+    "uri": "{{libvirtUri}}"
+  }
+}
+
+assert {
+  res.status: eq 201
+}
+
+script:post-response {
+  if (res.status === 201) { bru.setVar("hypervisorId", res.body.id); }
+}
+
+docs {
+  201 -> Hypervisor {id,name,uri,status}. The API opens a libvirt connection first; 502 if it fails. Stores hypervisorId for the other requests.
+}

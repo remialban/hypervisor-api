@@ -1,0 +1,26 @@
+meta {
+  name: Create network
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{baseUrl}}{{apiPrefix}}/hypervisors/{{hypervisorId}}/networks
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+    "name": "net-01",
+    "bridge": "br0"
+  }
+}
+
+assert {
+  res.status: eq 501
+}
+
+docs {
+  Body: NetworkRequest {name, bridge (optional)}. Planned: Network. Not implemented yet: the API returns 501 {status:"not_implemented",content}. Update the assertion once libvirt is wired.
+}

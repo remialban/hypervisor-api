@@ -1,0 +1,25 @@
+meta {
+  name: Create hypervisor - missing field
+  type: http
+  seq: 4
+}
+
+post {
+  url: {{baseUrl}}{{apiPrefix}}/hypervisors
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+    "name": "no-uri"
+  }
+}
+
+assert {
+  res.status: eq 422
+}
+
+docs {
+  Axum JSON extractor rejection (422, plain-text body, not a Message). Shape is framework-defined.
+}
