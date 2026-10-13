@@ -75,3 +75,15 @@ pub struct NetworkRequest {
     pub name: String,
     pub bridge: Option<String>,
 }
+
+#[derive(Serialize, ToSchema)]
+pub struct VncResponse {
+    pub hypervisor_id: String,
+    pub vm_id: String,
+    pub uuid: String,
+    pub host: String,
+    pub port: String,
+    pub token: String,
+    pub novnc_url: String,
+    pub status: String,
+}
