@@ -52,9 +52,9 @@ Les VM, disques et reseaux ne doivent pas etre stockes dans SQLite. Leur source 
 - [x] Lister les VM avec libvirt (service fait, handler `vms::list` branche, teste sur qemu+ssh).
 - [x] Lire les details d'une VM (service fait, handler `vms::get` branche, teste sur qemu+ssh).
 - [ ] Creer une VM a partir d'une definition XML valide.
-- [ ] Demarrer une VM avec `Domain::create`.
-- [ ] Arreter proprement une VM avec `Domain::shutdown`.
-- [ ] Ajouter l'arret force avec `Domain::destroy` si necessaire.
+- [x] Demarrer une VM avec `Domain::create` (teste sur qemu+ssh).
+- [x] Arreter proprement une VM avec `Domain::shutdown` (asynchrone, teste).
+- [x] Ajouter l'arret force avec `Domain::destroy` (`?force=true`, teste).
 - [ ] Cloner une VM avec une nouvelle definition XML et ses disques.
 - [ ] Supprimer une VM avec confirmation explicite.
 - [ ] Ajouter des tests avec un faux service libvirt ou une couche mockable.

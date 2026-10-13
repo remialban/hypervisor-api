@@ -33,12 +33,44 @@ pub async fn list_vms(uri: String, hypervisor_id: String) -> Result<Vec<VirtualM
 
 /// Reads one VM from its libvirt UUID.
 pub async fn get_vm(uri: String, hypervisor_id: String, vm_id: String) -> Result<VirtualMachine, ApiError> {
+    with_domain(uri, vm_id, move |domain| to_vm(domain, &hypervisor_id)).await
+}
+
+/// Starts a stopped VM and returns its new state.
+pub async fn start_vm(uri: String, hypervisor_id: String, vm_id: String) -> Result<VirtualMachine, ApiError> {
+    with_domain(uri, vm_id, move |domain| {
+        domain.create()?;
+        to_vm(domain, &hypervisor_id)
+    })
+    .await
+}
+
+/// Stops a VM. `force = false` sends an ACPI shutdown request: the guest decides when
+/// to stop, so the returned state may still be `running`. `force = true` cuts the power.
+pub async fn stop_vm(uri: String, hypervisor_id: String, vm_id: String, force: bool) -> Result<VirtualMachine, ApiError> {
+    with_domain(uri, vm_id, move |domain| {
+        if force {
+            domain.destroy()?;
+        } else {
+            domain.shutdown()?;
+        }
+        to_vm(domain, &hypervisor_id)
+    })
+    .await
+}
+
+/// Opens a connection, finds the domain from its UUID and runs `action` on it.
+async fn with_domain<T, F>(uri: String, vm_id: String, action: F) -> Result<T, ApiError>
+where
+    F: FnOnce(&Domain) -> Result<T, ApiError> + Send + 'static,
+    T: Send + 'static,
+{
     // Also protects the C call below: a UUID with a NUL byte would make it panic.
     Uuid::parse_str(&vm_id).map_err(|_| ApiError::BadRequest("Invalid VM identifier".into()))?;
     run_blocking(move || {
         let conn = Connect::open(Some(&uri))?;
         let domain = Domain::lookup_by_uuid_string(&conn, &vm_id)?;
-        to_vm(&domain, &hypervisor_id)
+        action(&domain)
     })
     .await
 }

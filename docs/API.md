@@ -68,7 +68,7 @@ Reponses : `204` ou `404`.
 
 ## VM
 
-Les routes VM ne stockent rien dans SQLite. `GET .../vms` et `GET .../vms/{vm_id}` lisent libvirt (`vm_id` = UUID libvirt, erreurs 400, 404 et 502). Les autres routes repondent encore `501 Not Implemented`.
+Les routes VM ne stockent rien dans SQLite. `GET .../vms` et `GET .../vms/{vm_id}` lisent libvirt (`vm_id` = UUID libvirt, erreurs 400, 404 et 502). `POST .../start` et `POST .../stop` agissent sur libvirt et renvoient la VM (200) ou 409 si l'etat ne le permet pas. `stop` envoie un arret ACPI asynchrone (l'etat renvoye peut encore etre `running`) ; `?force=true` coupe immediatement l'alimentation. Les autres routes repondent encore `501 Not Implemented`.
 
 ```text
 GET    /api/hypervisors/{hypervisor_id}/vms

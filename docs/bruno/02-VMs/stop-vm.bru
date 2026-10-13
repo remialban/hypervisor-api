@@ -5,15 +5,19 @@ meta {
 }
 
 post {
-  url: {{baseUrl}}{{apiPrefix}}/hypervisors/{{hypervisorId}}/vms/{{vmId}}/stop
+  url: {{baseUrl}}{{apiPrefix}}/hypervisors/{{hypervisorId}}/vms/{{vmId}}/stop?force=true
   body: none
   auth: none
 }
 
+params:query {
+  force: true
+}
+
 assert {
-  res.status: eq 501
+  res.status: eq 200
 }
 
 docs {
-  Not implemented yet: the API returns 501 {status:"not_implemented",content}. Update the assertion once libvirt is wired.
+  Graceful ACPI shutdown (asynchronous: the guest may still be running in the response, and a guest that ignores ACPI never stops). Add ?force=true to cut the power. 409 if the VM is already stopped.
 }
