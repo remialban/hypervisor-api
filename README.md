@@ -5,12 +5,14 @@ API Rust avec Axum pour enregistrer plusieurs hyperviseurs KVM et gerer leurs re
 ## Fonctionnalites
 
 - CRUD des hyperviseurs dans SQLite.
-- CRUD des VM prevu via libvirt, sans stockage SQLite.
+- Lecture des VM via libvirt, sans stockage SQLite.
 - Gestion des disques et reseaux prevue via libvirt, sans stockage SQLite.
 - Documentation OpenAPI et interface Swagger.
 - Verification de la connexion libvirt lors de l'ajout ou de la modification d'un hyperviseur.
 
-Les operations libvirt reelles pour gerer les VM, disques, reseaux et VNC sont encore a brancher dans les handlers correspondants.
+Les VM et la configuration VNC sont lues directement depuis libvirt. Les
+operations de creation, de modification et de suppression des VM, disques et
+reseaux restent a implementer dans les handlers correspondants.
 
 ## Prerequis
 
@@ -23,6 +25,12 @@ Sur Debian ou Ubuntu :
 ```bash
 sudo apt update
 sudo apt install build-essential pkg-config libvirt-dev libvirt-daemon-system libvirt-clients qemu-kvm
+```
+
+Pour utiliser noVNC et websockify :
+
+```bash
+sudo apt install novnc websockify
 ```
 
 Verifier libvirt :
@@ -45,13 +53,22 @@ Depuis la racine du projet :
 cargo check
 ```
 
-Cargo telecharge les dependances, dont `virt`, `sqlx`, `utoipa` et Swagger UI.
+Cargo telecharge les dependances, dont `virt`, `sqlx`, `roxmltree`, `url`,
+`utoipa` et Swagger UI.
 
 ## Demarrage
 
+### Demarrer l'API avec l'hote noVNC
+
+La variable `NOVNC_HOST` indique l'adresse utilisée par l'API pour construire
+l'URL noVNC retournée par l'endpoint VNC. Remplacez `192.168.122.100` par
+l'adresse accessible depuis le navigateur client :
+
 ```bash
-cargo run
+NOVNC_HOST=192.168.122.100 cargo run
 ```
+
+Par défaut, si `NOVNC_HOST` n'est pas définie, l'API utilise `localhost`.
 
 L'API ecoute sur :
 
@@ -59,7 +76,56 @@ L'API ecoute sur :
 http://127.0.0.1:3000
 ```
 
-Arreter le serveur avec `Ctrl+C`.
+### Demarrer websockify
+
+Dans un autre terminal, lancez `websockify` avec le fichier de tokens généré
+par l'endpoint VNC :
+
+```bash
+websockify \
+  --token-plugin TokenFile \
+  --token-source /home/user/Documents/api/vm.cfg \
+  6080 \
+  --web /usr/share/novnc
+```
+
+noVNC sera alors accessible sur :
+
+```text
+http://192.168.122.100:6080/vnc.html
+```
+
+Le fichier `vm.cfg` contient une ligne par VM au format attendu par
+`websockify` :
+
+```text
+UUID_DE_LA_VM: ADRESSE_HYPERVISEUR:PORT_VNC
+```
+
+Le fichier est mis à jour lorsqu'une requête est envoyée à :
+
+```text
+GET /api/hypervisors/{hypervisor_id}/vms/{vm_id}/vnc
+```
+
+L'endpoint renvoie ensuite une propriété `novnc_url` contenant le token de la
+VM. Ouvrez cette URL dans le navigateur pour établir la connexion VNC.
+
+L'ordre recommandé est :
+
+1. démarrer l'API avec `NOVNC_HOST` ;
+2. démarrer `websockify` dans un autre terminal ;
+3. appeler l'endpoint VNC pour générer ou mettre à jour la ligne dans
+   `vm.cfg` ;
+4. ouvrir la valeur `novnc_url` retournée par l'API.
+
+Exemple d'appel de l'endpoint VNC :
+
+```bash
+curl http://127.0.0.1:3000/api/hypervisors/<HYPERVISOR_ID>/vms/<VM_NAME>/vnc
+```
+
+Arreter l'API ou `websockify` avec `Ctrl+C`.
 
 ## SQLite
 

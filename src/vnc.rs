@@ -5,7 +5,7 @@ use roxmltree::Document;
 use url::Url;
 use virt::{connect::Connect, domain::Domain};
 
-use crate::state::SharedState;
+use crate::{models::VncResponse, state::SharedState};
 
 type ApiError = (StatusCode, Json<HashMap<String, String>>);
 
@@ -16,13 +16,13 @@ type ApiError = (StatusCode, Json<HashMap<String, String>>);
         ("hypervisor_id" = String, Path, description = "Hôte ou IP de l'hyperviseur"),
         ("vm_id" = String, Path, description = "Nom ou UUID de la VM")
     ),
-    responses((status = 200, body = Object)),
+    responses((status = 200, body = VncResponse)),
     tag = "VNC"
 )]
 pub async fn connect(
     State(state): State<SharedState>,
     Path((hypervisor_id, vm_id)): Path<(String, String)>,
-) -> Result<Json<HashMap<String, String>>, ApiError> {
+) -> Result<Json<VncResponse>, ApiError> {
     let uri: String = sqlx::query_scalar(
         "SELECT uri FROM hypervisors WHERE id = ?",
     )
@@ -100,21 +100,27 @@ pub async fn connect(
             )
         })?;
 
-    let novnc_base_url = std::env::var("NOVNC_URL")
-        .unwrap_or_else(|_| "http://localhost:6080/vnc.html".to_owned());
-    let novnc_url = format!("{novnc_base_url}?token={token}");
+    let novnc_url = match std::env::var("NOVNC_URL") {
+        Ok(base_url) => format!("{base_url}&token={token}&autoconnect=true"),
+        Err(_) => {
+            let novnc_host =
+                std::env::var("NOVNC_HOST").unwrap_or_else(|_| "localhost".to_owned());
+            format!(
+                "http://{novnc_host}:6080/vnc.html?path=websockify/?token={token}&autoconnect=true"
+            )
+        }
+    };
 
-    let mut values = HashMap::new();
-    values.insert("hypervisor_id".to_owned(), hypervisor_id);
-    values.insert("vm_id".to_owned(), vm_id);
-    values.insert("uuid".to_owned(), token.clone());
-    values.insert("host".to_owned(), hypervisor_host);
-    values.insert("port".to_owned(), vnc_port);
-    values.insert("token".to_owned(), token);
-    values.insert("novnc_url".to_owned(), novnc_url);
-    values.insert("status".to_owned(), "connected".to_owned());
-
-    Ok(Json(values))
+    Ok(Json(VncResponse {
+        hypervisor_id,
+        vm_id,
+        uuid: token.clone(),
+        host: hypervisor_host,
+        port: vnc_port,
+        token,
+        novnc_url,
+        status: "connected".to_owned(),
+    }))
 }
 
 async fn update_vm_config(token: &str, target: &str) -> Result<(), std::io::Error> {

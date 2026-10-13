@@ -6,7 +6,7 @@ use crate::{
     infrastructure,
     models::{
         CreateHypervisor, CreateVm, Disk, DiskRequest, Hypervisor, Message, Network,
-        NetworkRequest, UpdateHypervisor, VirtualMachine,
+        NetworkRequest, UpdateHypervisor, VirtualMachine, VncResponse,
     },
     vms,
     vnc,
@@ -52,7 +52,8 @@ use crate::{
         Disk,
         DiskRequest,
         Network,
-        NetworkRequest
+        NetworkRequest,
+        VncResponse
     )),
     tags(
         (name = "Hypervisors", description = "Hypervisor management"),
