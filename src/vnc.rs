@@ -14,7 +14,7 @@ type ApiError = (StatusCode, Json<HashMap<String, String>>);
     path = "/api/hypervisors/{hypervisor_id}/vms/{vm_id}/vnc",
     params(
         ("hypervisor_id" = String, Path, description = "Hôte ou IP de l'hyperviseur"),
-        ("vm_id" = String, Path, description = "Nom ou UUID de la VM")
+        ("vm_id" = String, Path, description = "UUID libvirt de la VM")
     ),
     responses((status = 200, body = VncResponse)),
     tag = "VNC"
@@ -55,8 +55,8 @@ pub async fn connect(
     let conn = Connect::open(Some(&uri))
         .map_err(|e| api_error(StatusCode::BAD_GATEWAY, e.to_string()))?;
 
-    // 2. Récupération du domaine par son nom (vm_id)
-    let domain = Domain::lookup_by_name(&conn, &vm_id)
+    // 2. Récupération du domaine par son UUID libvirt
+    let domain = Domain::lookup_by_uuid_string(&conn, &vm_id)
         .map_err(|e| api_error(StatusCode::NOT_FOUND, e.to_string()))?;
 
     let vm_uuid = domain
