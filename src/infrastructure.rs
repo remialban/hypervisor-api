@@ -4,8 +4,21 @@ use crate::{common::{error_response, not_implemented}, models::{Disk, DiskReques
 state::SharedState};
 
 type ApiResponse = (StatusCode, Json<Message>);
+type ApiError = (StatusCode, Json<Message>);
+
+const DEFAULT_STORAGE_POOL: &str = "default-pool";
 
 //mod hypervisors;
+async fn get_hypervisor_uri(state: &SharedState, hypervisor_id: &str) -> Result<String, ApiError> {
+    sqlx::query_as::<_, (String,)>("SELECT uri FROM hypervisors WHERE id = ?")
+        .bind(hypervisor_id)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(|_| error_response(StatusCode::INTERNAL_SERVER_ERROR, "Erreur lecture BD"))?
+        .map(|(uri,)| uri)
+        .ok_or_else(|| error_response(StatusCode::NOT_FOUND, "Hyperviseur non trouvé"))
+}
+
 fn list_disks_from_libvirt(
     uri: &str,
     hypervisor_id: &str,
@@ -31,32 +44,74 @@ fn list_disks_from_libvirt(
     Ok(disks)
 }
 
-#[utoipa::path(get, path = "/api/hypervisors/{hypervisor_id}/disks", params(("hypervisor_id" = String, Path)), responses((status = 501, body = Message)), tag = "Infrastructure")]
-pub async fn list_disks(State(state): State<SharedState>, Path(hypervisor_id): Path<String>) -> Result<Json<Vec<Disk>>, ApiResponse> {
-
-    // 1. Récupération de l'URI de l'hyperviseur depuis SQLite
-    let (uri,) = sqlx::query_as::<_, (String,)>("SELECT uri FROM hypervisors WHERE id = ?")
-        .bind(&hypervisor_id)
-        .fetch_optional(&state.db)
-        .await
-        .map_err(|_| error_response(StatusCode::INTERNAL_SERVER_ERROR, "Erreur lecture BD"))?
-        .ok_or_else(|| error_response(StatusCode::NOT_FOUND, "Hyperviseur non trouvé"))?;
-
-    // 2. Appel bloquant libvirt
-    let hyp_id = hypervisor_id.clone();
-    let disks = tokio::task::spawn_blocking(move || list_disks_from_libvirt(&uri, &hyp_id))
+#[utoipa::path(get, path = "/api/hypervisors/{hypervisor_id}/disks", params(("hypervisor_id" = String, Path)), responses((status = 200, body = [Disk]), (status = 404, body = Message), (status = 500, body = Message), (status = 502, body = Message)), tag = "Infrastructure")]
+pub async fn list_disks(
+    State(state): State<SharedState>,
+    Path(hypervisor_id): Path<String>,
+) -> Result<Json<Vec<Disk>>, ApiError> {
+    let uri = get_hypervisor_uri(&state, &hypervisor_id).await?;
+    let disks = tokio::task::spawn_blocking(move || {
+        list_disks_from_libvirt(&uri, &hypervisor_id)
+    })
         .await
         .map_err(|_| error_response(StatusCode::INTERNAL_SERVER_ERROR, "Tâche bloquée en échec"))?
         .map_err(|_| error_response(StatusCode::BAD_GATEWAY, "Erreur libvirt"))?;
 
     Ok(Json(disks))
-    //not_implemented("Disk listing will be connected to libvirt; disks are not stored in SQLite")
 }
 
-#[utoipa::path(post, path = "/api/hypervisors/{hypervisor_id}/disks", params(("hypervisor_id" = String, Path)), request_body = DiskRequest, responses((status = 501, body = Message)), tag = "Infrastructure")]
-pub async fn create_disk(Path(_hypervisor_id): Path<String>, Json(body): Json<DiskRequest>) -> ApiResponse {
-    let _ = (body.name, body.size_gb, body.format);
-    not_implemented("Disk creation will be connected to libvirt; disks are not stored in SQLite")
+#[utoipa::path(post, path = "/api/hypervisors/{hypervisor_id}/disks", params(("hypervisor_id" = String, Path)), request_body = DiskRequest, responses((status = 201, body = Disk), (status = 400, body = Message), (status = 404, body = Message), (status = 500, body = Message), (status = 502, body = Message)), tag = "Infrastructure")]
+pub async fn create_disk(
+    State(state): State<SharedState>,
+    Path(hypervisor_id): Path<String>,
+    Json(body): Json<DiskRequest>,
+) -> Result<(StatusCode, Json<Disk>), ApiError> {
+    if body.name.is_empty()
+        || !body.name.chars().all(|character| {
+            character.is_ascii_alphanumeric() || "-_.".contains(character)
+        })
+    {
+        return Err(error_response(StatusCode::BAD_REQUEST, "Nom de disque invalide"));
+    }
+    if !matches!(body.format.as_str(), "qcow2" | "raw") {
+        return Err(error_response(StatusCode::BAD_REQUEST, "Format attendu: qcow2 ou raw"));
+    }
+
+    let size_bytes = body.size_gb.checked_mul(1_073_741_824)
+        .ok_or_else(|| error_response(StatusCode::BAD_REQUEST, "Taille de disque invalide"))?;
+    let size_gb = i64::try_from(body.size_gb)
+        .map_err(|_| error_response(StatusCode::BAD_REQUEST, "Taille de disque invalide"))?;
+    let uri = get_hypervisor_uri(&state, &hypervisor_id).await?;
+
+    let disk = tokio::task::spawn_blocking(move || {
+        let connection = virt::connect::Connect::open(Some(&uri))?;
+        let pool = virt::storage_pool::StoragePool::lookup_by_name(
+            &connection,
+            DEFAULT_STORAGE_POOL,
+        )?;
+        let xml = format!(
+            "<volume><name>{}</name><capacity unit='bytes'>{size_bytes}</capacity><target><format type='{}'/></target></volume>",
+            body.name,
+            body.format,
+        );
+        let volume = virt::storage_vol::StorageVol::create_xml(&pool, &xml, 0)?;
+
+        Ok::<Disk, virt::error::Error>(Disk {
+            id: volume.get_key()?,
+            hypervisor_id,
+            name: body.name,
+            size_gb,
+            format: body.format,
+        })
+    })
+    .await
+    .map_err(|_| error_response(StatusCode::INTERNAL_SERVER_ERROR, "Tâche de création en échec"))?
+    .map_err(|error| {
+        eprintln!("create_disk libvirt error: {error}");
+        error_response(StatusCode::BAD_GATEWAY, "Erreur libvirt")
+    })?;
+
+    Ok((StatusCode::CREATED, Json(disk)))
 }
 
 #[utoipa::path(get, path = "/api/hypervisors/{hypervisor_id}/disks/{disk_id}", params(("hypervisor_id" = String, Path), ("disk_id" = String, Path)), responses((status = 501, body = Message)), tag = "Infrastructure")]
