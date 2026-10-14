@@ -127,6 +127,63 @@ curl http://127.0.0.1:3000/api/hypervisors/<HYPERVISOR_ID>/vms/<VM_NAME>/vnc
 
 Arreter l'API ou `websockify` avec `Ctrl+C`.
 
+### Lancer l'API et noVNC avec Docker Compose
+
+Le Compose lance deux conteneurs distincts :
+
+- `api` : l'API Rust sur le port `3000` ;
+- `novnc` : noVNC et websockify sur le port `6080`.
+
+Les deux conteneurs utilisent le fichier `./vm.cfg`. L'API écrit les cibles
+VNC dans ce fichier, que websockify lit également. La base SQLite reste
+persistée dans `./data/api.db`.
+
+Créez un fichier `.env` à la racine du projet :
+
+```dotenv
+SSH_PRIVATE_KEY_HOST_PATH=/home/user/.ssh/id_ed25519
+NOVNC_URL=http://localhost:6080/vnc.html
+```
+
+Puis lancez l'application :
+
+```bash
+mkdir -p data
+touch vm.cfg
+docker compose up --build
+```
+
+L'API est disponible sur `http://localhost:3000`, Swagger sur
+`http://localhost:3000/swagger-ui/` et noVNC sur
+`http://localhost:6080/vnc.html`.
+
+`NOVNC_URL` est l'URL de base utilisée par l'API pour construire la propriété
+`novnc_url` retournée par l'endpoint VNC. L'API ajoute automatiquement le
+token et `autoconnect=true`.
+
+Si Docker est lancé sur une machine accessible à l'adresse
+`192.168.122.100`, utilisez par exemple :
+
+```dotenv
+NOVNC_URL=http://192.168.122.100:6080/vnc.html
+```
+
+Lancez ensuite :
+
+```bash
+docker compose up --build --remove-orphans
+```
+
+Le socket `/var/run/libvirt/libvirt-sock` est monté pour les hyperviseurs
+locaux. La clé privée SSH est montée en lecture seule dans le backend à
+`/run/secrets/ssh_private_key` pour les futures connexions libvirt via SSH.
+
+Pour arrêter le conteneur :
+
+```bash
+docker compose down
+```
+
 ## SQLite
 
 La base est creee automatiquement au demarrage :

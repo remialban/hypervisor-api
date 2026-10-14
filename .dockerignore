@@ -1,0 +1,10 @@
+.git
+.github
+.idea
+.vscode
+target
+api.db
+*.db-shm
+*.db-wal
+data
+docs/bruno/node_modules

@@ -1,0 +1,12 @@
+FROM debian:bookworm-slim
+
+RUN apt-get update \
+    && apt-get install --no-install-recommends -y bash novnc websockify \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY docker/novnc-entrypoint.sh /usr/local/bin/novnc-entrypoint
+RUN chmod +x /usr/local/bin/novnc-entrypoint
+
+EXPOSE 6080
+
+ENTRYPOINT ["/usr/local/bin/novnc-entrypoint"]

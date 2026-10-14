@@ -1,6 +1,10 @@
 use std::collections::HashMap;
 
-use axum::{Json, extract::{Path, State}, http::StatusCode};
+use axum::{
+    Json,
+    extract::{Path, State},
+    http::StatusCode,
+};
 use roxmltree::Document;
 use url::Url;
 use virt::{connect::Connect, domain::Domain};
@@ -23,22 +27,17 @@ pub async fn connect(
     State(state): State<SharedState>,
     Path((hypervisor_id, vm_id)): Path<(String, String)>,
 ) -> Result<Json<VncResponse>, ApiError> {
-    let uri: String = sqlx::query_scalar(
-        "SELECT uri FROM hypervisors WHERE id = ?",
-    )
-    .bind(&hypervisor_id)
-    .fetch_optional(&state.db)
-    .await
-    .map_err(|error| api_error(
-        StatusCode::INTERNAL_SERVER_ERROR,
-        format!("Impossible de lire l'hyperviseur : {error}"),
-    ))?
-    .ok_or_else(|| {
-        api_error(
-            StatusCode::NOT_FOUND,
-            "Hyperviseur introuvable".to_owned(),
-        )
-    })?;
+    let uri: String = sqlx::query_scalar("SELECT uri FROM hypervisors WHERE id = ?")
+        .bind(&hypervisor_id)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(|error| {
+            api_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Impossible de lire l'hyperviseur : {error}"),
+            )
+        })?
+        .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "Hyperviseur introuvable".to_owned()))?;
 
     let hypervisor_host = Url::parse(&uri)
         .map_err(|error| {
@@ -52,8 +51,8 @@ pub async fn connect(
         .to_owned();
 
     // 1. Connexion à l'hyperviseur distant
-    let conn = Connect::open(Some(&uri))
-        .map_err(|e| api_error(StatusCode::BAD_GATEWAY, e.to_string()))?;
+    let conn =
+        Connect::open(Some(&uri)).map_err(|e| api_error(StatusCode::BAD_GATEWAY, e.to_string()))?;
 
     // 2. Récupération du domaine par son UUID libvirt
     let domain = Domain::lookup_by_uuid_string(&conn, &vm_id)
@@ -74,12 +73,7 @@ pub async fn connect(
         .descendants()
         .find(|n| n.has_tag_name("graphics") && n.attribute("type") == Some("vnc"))
         .and_then(|n| n.attribute("port"))
-        .ok_or_else(|| {
-            api_error(
-                StatusCode::NOT_FOUND,
-                "Aucun port VNC trouvé".to_owned(),
-            )
-        })?
+        .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "Aucun port VNC trouvé".to_owned()))?
         .to_string();
 
     if vnc_port == "-1" {
@@ -91,20 +85,17 @@ pub async fn connect(
 
     let token = vm_uuid.clone();
     let target = format!("{hypervisor_host}:{vnc_port}");
-    update_vm_config(&token, &target)
-        .await
-        .map_err(|error| {
-            api_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Impossible de mettre à jour vm.cfg : {error}"),
-            )
-        })?;
+    update_vm_config(&token, &target).await.map_err(|error| {
+        api_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Impossible de mettre à jour vm.cfg : {error}"),
+        )
+    })?;
 
     let novnc_url = match std::env::var("NOVNC_URL") {
-        Ok(base_url) => format!("{base_url}&token={token}&autoconnect=true"),
+        Ok(base_url) => build_novnc_url(&base_url, &token),
         Err(_) => {
-            let novnc_host =
-                std::env::var("NOVNC_HOST").unwrap_or_else(|_| "localhost".to_owned());
+            let novnc_host = std::env::var("NOVNC_HOST").unwrap_or_else(|_| "localhost".to_owned());
             format!(
                 "http://{novnc_host}:6080/vnc.html?path=websockify/?token={token}&autoconnect=true"
             )
@@ -151,6 +142,11 @@ async fn update_vm_config(token: &str, target: &str) -> Result<(), std::io::Erro
     let mut content = lines.join("\n");
     content.push('\n');
     tokio::fs::write(path, content).await
+}
+
+fn build_novnc_url(base_url: &str, token: &str) -> String {
+    let page_url = base_url.split_once('?').map_or(base_url, |(url, _)| url);
+    format!("{page_url}?path=websockify/?token={token}&autoconnect=true")
 }
 
 fn api_error(status: StatusCode, message: String) -> ApiError {
