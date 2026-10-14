@@ -2,8 +2,11 @@ use std::sync::Arc;
 
 use sqlx::{sqlite::SqlitePoolOptions, SqlitePool};
 
+use crate::jobs::JobRegistry;
+
 pub struct AppState {
     pub db: SqlitePool,
+    pub jobs: JobRegistry,
 }
 
 impl AppState {
@@ -24,7 +27,10 @@ impl AppState {
         .execute(&db)
         .await?;
 
-        Ok(Self { db })
+        Ok(Self {
+            db,
+            jobs: JobRegistry::default(),
+        })
     }
 }
 

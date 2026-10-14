@@ -11,9 +11,9 @@ get {
 }
 
 assert {
-  res.status: eq 501
+  res.status: eq 200
 }
 
 docs {
-  Planned: VirtualMachine[]. Not implemented yet: the API returns 501 {status:"not_implemented",content}. Update the assertion once libvirt is wired.
+  Lists every VM of the hypervisor (running or not) from libvirt. Returns VirtualMachine[].
 }
