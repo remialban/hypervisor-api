@@ -30,7 +30,8 @@ No secrets are needed today. If auth is added, use `{{process.env.NAME}}` with a
 | Folder | State |
 |---|---|
 | Health, Hypervisors | Implemented (SQLite + libvirt connection test) |
-| VMs, Disks, Networks, VNC (own Swagger tag and folder) | Return `501 {"status":"not_implemented","content":...}`. Assertions expect 501 for now. |
+| Storage pools in Disks | List and create pools through libvirt. |
+| VMs, Disks, Networks, VNC | Other operations still return `501 {"status":"not_implemented","content":...}` where not implemented. |
 | Error cases | 502 unreachable URI, 404 unknown id, 422 invalid body (framework message, plain text, not a `Message`) |
 
 When an endpoint gets implemented, change its `assert` status and body in the `.bru` file.

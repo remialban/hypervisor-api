@@ -1,0 +1,26 @@
+meta {
+  name: Create storage pool
+  type: http
+  seq: 4
+}
+
+post {
+  url: {{baseUrl}}{{apiPrefix}}/hypervisors/{{hypervisorId}}/pools
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+    "name": "api-test-pool",
+    "target_path": "/tmp/api-test-pool"
+  }
+}
+
+assert {
+  res.status: eq 201
+}
+
+docs {
+  Defines and starts a directory-backed storage pool in libvirt.
+}

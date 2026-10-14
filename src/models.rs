@@ -62,6 +62,20 @@ pub struct Disk {
     pub format: String,
 }
 
+#[derive(Clone, Serialize, ToSchema)]
+pub struct StoragePool {
+    pub id: String,
+    pub hypervisor_id: String,
+    pub name: String,
+    pub active: bool,
+}
+
+#[derive(Deserialize, ToSchema)]
+pub struct StoragePoolRequest {
+    pub name: String,
+    pub target_path: String,
+}
+
 #[derive(Clone, Serialize, ToSchema, FromRow)]
 pub struct Network {
     pub id: String,

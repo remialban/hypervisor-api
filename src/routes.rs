@@ -50,6 +50,10 @@ pub fn create_routes(state: SharedState) -> Router {
             get(infrastructure::list_disks).post(infrastructure::create_disk),
         )
         .route(
+            "/api/hypervisors/{hypervisor_id}/pools",
+            get(infrastructure::list_pools).post(infrastructure::create_pools),
+        )
+        .route(
             "/api/hypervisors/{hypervisor_id}/disks/{disk_id}",
             get(infrastructure::get_disk)
                 .patch(infrastructure::update_disk)

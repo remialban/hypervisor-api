@@ -6,7 +6,8 @@ use crate::{
     infrastructure,
     models::{
         CreateHypervisor, CreateVm, Disk, DiskRequest, Hypervisor, Message, Network,
-        NetworkRequest, UpdateHypervisor, VirtualMachine, VncResponse,
+        NetworkRequest, StoragePool, StoragePoolRequest, UpdateHypervisor, VirtualMachine,
+        VncResponse,
     },
     vms,
     vnc,
@@ -35,6 +36,8 @@ use crate::{
         vms::delete,
         infrastructure::list_disks,
         infrastructure::create_disk,
+        infrastructure::list_pools,
+        infrastructure::create_pools,
         infrastructure::get_disk,
         infrastructure::update_disk,
         infrastructure::delete_disk,
@@ -51,6 +54,8 @@ use crate::{
         VirtualMachine,
         Disk,
         DiskRequest,
+        StoragePool,
+        StoragePoolRequest,
         Network,
         NetworkRequest,
         VncResponse

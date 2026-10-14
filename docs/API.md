@@ -92,7 +92,7 @@ Corps prevu pour la creation :
 
 ## Disques
 
-Les routes disques sont exposees, mais ne stockent rien dans SQLite et repondent actuellement `501 Not Implemented`.
+Les disques et les pools sont geres directement par libvirt, sans stockage dans SQLite.
 
 ```text
 GET    /api/hypervisors/{hypervisor_id}/disks
@@ -111,6 +111,26 @@ Corps prevu :
   "format": "qcow2"
 }
 ```
+
+### Pools de stockage
+
+Les pools sont rattaches a un hyperviseur et listes/crees via libvirt. La creation definit un pool de type `dir`, construit le repertoire cible et demarre le pool.
+
+```text
+GET  /api/hypervisors/{hypervisor_id}/pools
+POST /api/hypervisors/{hypervisor_id}/pools
+```
+
+Corps de creation :
+
+```json
+{
+  "name": "default",
+  "target_path": "/tmp/libvirt-pools/default"
+}
+```
+
+La reponse de pool contient son UUID `id`, son `hypervisor_id`, son `name` et son etat `active`.
 
 ## Reseaux
 

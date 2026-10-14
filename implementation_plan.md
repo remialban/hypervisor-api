@@ -61,6 +61,9 @@ Les VM, disques et reseaux ne doivent pas etre stockes dans SQLite. Leur source 
 
 ### Priorite 2 : disques et reseaux libvirt
 
+- [x] Lister les pools de stockage libvirt par hyperviseur (`GET /api/hypervisors/{hypervisor_id}/pools`).
+- [x] Creer et demarrer un pool de type `dir` avec un nom et un chemin cible (`POST /api/hypervisors/{hypervisor_id}/pools`).
+- [x] Ajouter les modeles de pool avec UUID, nom, hyperviseur associe et etat actif, sans stockage SQLite.
 - [ ] Lister les volumes libvirt sans les copier dans SQLite.
 - [ ] Creer un volume avec le pool de stockage choisi.
 - [ ] Modifier les metadonnees ou la taille selon les capacites libvirt.
@@ -159,6 +162,9 @@ Apres toute modification d'une route :
 
 ## Derniere validation connue
 
-- `cargo check` : reussi.
+- `cargo check` : reussi apres l'ajout des routes de pools.
+- `cargo test` : reussi (4 tests).
+- `git diff --check` : reussi.
 - `cargo fmt --check` : non disponible tant que `rustfmt` n'est pas installe.
-- Les routes VM, disques, reseaux et VNC repondent actuellement `501` et ne persistent aucune donnee SQLite.
+- Les routes de pools sont implementees dans `infrastructure.rs` et documentees dans OpenAPI, `docs/API.md` et Bruno.
+- Le test HTTP de creation de pool avec `test:///default` reste a faire ; le pilote de test expose le pool actif `default-pool`.

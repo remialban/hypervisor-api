@@ -1,6 +1,8 @@
 use axum::{extract::{Path,State}, http::StatusCode, Json};
+use std::path::Path as FilePath;
+use xmltree::{Element, XMLNode};
 
-use crate::{common::{error_response, not_implemented}, models::{Disk, DiskRequest, Message, NetworkRequest},
+use crate::{common::{error_response, not_implemented}, models::{Disk, DiskRequest, Message, NetworkRequest, StoragePool, StoragePoolRequest},
 state::SharedState};
 
 type ApiResponse = (StatusCode, Json<Message>);
@@ -17,6 +19,107 @@ async fn get_hypervisor_uri(state: &SharedState, hypervisor_id: &str) -> Result<
         .map_err(|_| error_response(StatusCode::INTERNAL_SERVER_ERROR, "Erreur lecture BD"))?
         .map(|(uri,)| uri)
         .ok_or_else(|| error_response(StatusCode::NOT_FOUND, "Hyperviseur non trouvé"))
+}
+
+fn list_pools_from_libvirt(
+    uri: &str,
+    hypervisor_id: &str,
+) -> Result<Vec<StoragePool>, virt::error::Error> {
+    let connection = virt::connect::Connect::open(Some(uri))?;
+    connection
+        .list_all_storage_pools(0)?
+        .iter()
+        .map(|pool| {
+            Ok(StoragePool {
+                id: pool.get_uuid_string()?,
+                hypervisor_id: hypervisor_id.to_owned(),
+                name: pool.get_name()?,
+                active: pool.is_active()?,
+            })
+        })
+        .collect()
+}
+
+#[utoipa::path(get, path = "/api/hypervisors/{hypervisor_id}/pools", params(("hypervisor_id" = String, Path)), responses((status = 200, body = [StoragePool]), (status = 404, body = Message), (status = 502, body = Message)), tag = "Infrastructure")]
+pub async fn list_pools(
+    State(state): State<SharedState>,
+    Path(hypervisor_id): Path<String>,
+) -> Result<Json<Vec<StoragePool>>, ApiError> {
+    let uri = get_hypervisor_uri(&state, &hypervisor_id).await?;
+    let pools = tokio::task::spawn_blocking(move || {
+        list_pools_from_libvirt(&uri, &hypervisor_id)
+    })
+    .await
+    .map_err(|_| error_response(StatusCode::INTERNAL_SERVER_ERROR, "Tâche bloquée en échec"))?
+    .map_err(|error| {
+        eprintln!("list_pools libvirt error: {error}");
+        error_response(StatusCode::BAD_GATEWAY, "Erreur libvirt")
+    })?;
+
+    Ok(Json(pools))
+}
+
+#[utoipa::path(post, path = "/api/hypervisors/{hypervisor_id}/pools", params(("hypervisor_id" = String, Path)), request_body = StoragePoolRequest, responses((status = 201, body = StoragePool), (status = 400, body = Message), (status = 404, body = Message), (status = 502, body = Message)), tag = "Infrastructure")]
+pub async fn create_pools(
+    State(state): State<SharedState>,
+    Path(hypervisor_id): Path<String>,
+    Json(body): Json<StoragePoolRequest>,
+) -> Result<(StatusCode, Json<StoragePool>), ApiError> {
+    let valid_name = !body.name.is_empty()
+        && body.name.len() <= 64
+        && !body.name.starts_with('.')
+        && body.name.chars().all(|character| {
+            character.is_ascii_alphanumeric() || "-_..".contains(character)
+        });
+    if !valid_name {
+        return Err(error_response(StatusCode::BAD_REQUEST, "Nom de pool invalide"));
+    }
+    if !FilePath::new(&body.target_path).is_absolute()
+        || body.target_path.chars().any(char::is_control)
+    {
+        return Err(error_response(StatusCode::BAD_REQUEST, "Le chemin cible doit être absolu et valide"));
+    }
+
+    let mut xml_root = Element::new("pool");
+    xml_root.attributes.insert("type".to_owned(), "dir".to_owned());
+    let mut name = Element::new("name");
+    name.children.push(XMLNode::Text(body.name.clone()));
+    let mut target = Element::new("target");
+    let mut path = Element::new("path");
+    path.children.push(XMLNode::Text(body.target_path));
+    target.children.push(XMLNode::Element(path));
+    xml_root.children.push(XMLNode::Element(name));
+    xml_root.children.push(XMLNode::Element(target));
+    let mut xml_bytes = Vec::new();
+    xml_root.write(&mut xml_bytes).map_err(|_| {
+        error_response(StatusCode::INTERNAL_SERVER_ERROR, "Erreur génération XML du pool")
+    })?;
+    let xml = String::from_utf8(xml_bytes).map_err(|_| {
+        error_response(StatusCode::INTERNAL_SERVER_ERROR, "XML du pool invalide")
+    })?;
+    let uri = get_hypervisor_uri(&state, &hypervisor_id).await?;
+
+    let pool = tokio::task::spawn_blocking(move || {
+        let connection = virt::connect::Connect::open(Some(&uri))?;
+        let pool = virt::storage_pool::StoragePool::define_xml(&connection, &xml, 0)?;
+        pool.build(0)?;
+        pool.create(0)?;
+
+        Ok::<StoragePool, virt::error::Error>(StoragePool {
+            id: pool.get_uuid_string()?,
+            hypervisor_id,
+            name: pool.get_name()?,
+            active: pool.is_active()?,
+        })
+    })
+    .await
+    .map_err(|_| error_response(StatusCode::INTERNAL_SERVER_ERROR, "Tâche de création en échec"))?
+    .map_err(|error| {
+        eprintln!("create_pools libvirt error: {error}");
+        error_response(StatusCode::BAD_GATEWAY, "Erreur libvirt")
+    })?;
+
+    Ok((StatusCode::CREATED, Json(pool)))
 }
 
 fn list_disks_from_libvirt(
