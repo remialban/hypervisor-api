@@ -28,11 +28,40 @@ pub struct UpdateHypervisor {
     pub uri: Option<String>,
 }
 
+/// Body of `POST .../vms`. What can be chosen is listed by `GET .../vm-options`.
 #[derive(Deserialize, ToSchema)]
 pub struct CreateVm {
     pub name: String,
     pub memory_mb: u64,
-    pub vcpus: u16,
+    pub vcpus: u64,
+    /// At least one disk, unless an ISO is given.
+    #[serde(default)]
+    pub disks: Vec<DiskSpec>,
+    /// Installation medium, attached as a CD-ROM and booted first.
+    pub iso: Option<VolumeRef>,
+    /// Virtual network to plug the VM into (default: `default`).
+    pub network: Option<String>,
+    /// `bios` (default) or `uefi`.
+    pub firmware: Option<String>,
+    /// Start the VM right after its creation (default: false).
+    pub start: Option<bool>,
+}
+
+/// A disk of the new VM: either a new volume (`size_gb`) or an existing one (`volume`).
+#[derive(Deserialize, ToSchema)]
+pub struct DiskSpec {
+    /// Storage pool holding (or receiving) the volume.
+    pub pool: String,
+    /// Creates a new thin-provisioned qcow2 volume of this size.
+    pub size_gb: Option<u64>,
+    /// Attaches this existing volume, which must not be used by another VM.
+    pub volume: Option<String>,
+}
+
+#[derive(Deserialize, ToSchema)]
+pub struct VolumeRef {
+    pub pool: String,
+    pub volume: String,
 }
 
 // Not stored in SQLite: built from libvirt, so no FromRow.

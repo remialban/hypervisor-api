@@ -14,14 +14,18 @@ body:json {
   {
     "name": "vm-01",
     "memory_mb": 2048,
-    "vcpus": 2
+    "vcpus": 2,
+    "disks": [{ "pool": "datastore", "size_gb": 20 }],
+    "network": "default",
+    "firmware": "bios",
+    "start": false
   }
 }
 
 assert {
-  res.status: eq 501
+  res.status: eq 201
 }
 
 docs {
-  Body: CreateVm {name, memory_mb (u64), vcpus (u16)}. Planned: VirtualMachine. Not implemented yet: the API returns 501 {status:"not_implemented",content}. Update the assertion once libvirt is wired.
+  Creates a VM from what "Get VM creation options" offers. disks: each one is new ({pool, size_gb}) or existing ({pool, volume}, not used by another VM). Optional iso {pool, volume}, network (default "default"), firmware ("bios" | "uefi"), start (default false). Returns the VM. 400 invalid values, 404 unknown pool/volume/network, 409 name taken or disk already used.
 }

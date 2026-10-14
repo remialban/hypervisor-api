@@ -59,6 +59,26 @@ pub enum VolumeKind {
     Iso,
 }
 
+/// Decides whether a volume can be offered as a disk or an ISO, `None` for any other file.
+///
+/// libvirt reports `raw` for every file it cannot identify (archives, scripts...), so a
+/// raw file is only a disk when its name says so.
+pub fn classify_volume(name: &str, format: &str, is_block_device: bool) -> Option<VolumeKind> {
+    let extension = name
+        .rsplit_once('.')
+        .map(|(_, ext)| ext.to_ascii_lowercase());
+    let extension = extension.as_deref();
+    if format == "iso" || extension == Some("iso") {
+        return Some(VolumeKind::Iso);
+    }
+    let known_image_format = matches!(
+        format,
+        "qcow2" | "qcow" | "qed" | "vmdk" | "vdi" | "vpc" | "vhd" | "vhdx" | "cow"
+    );
+    let raw_image = format == "raw" && matches!(extension, Some("img" | "raw"));
+    (is_block_device || known_image_format || raw_image).then_some(VolumeKind::Disk)
+}
+
 #[derive(Serialize, ToSchema)]
 pub struct VolumeOption {
     pub name: String,
@@ -138,4 +158,39 @@ pub async fn get(
 ) -> Result<Json<VmOptions>, ApiError> {
     let uri = libvirt::hypervisor_uri(&state.db, &hypervisor_id).await?;
     Ok(Json(libvirt::vm_options(uri).await?))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn classifies_real_volumes_of_a_hypervisor() {
+        let disk = Some(VolumeKind::Disk);
+        let iso = Some(VolumeKind::Iso);
+        let cases = [
+            ("debian13.qcow2", "qcow2", disk),
+            ("disk.img", "raw", disk),
+            ("DISK.IMG", "raw", disk),
+            ("vm.raw", "raw", disk),
+            ("old.vmdk", "vmdk", disk),
+            ("proxmox-ve_9.2-1.iso", "iso", iso),
+            ("install.ISO", "raw", iso),
+            // Files libvirt calls raw but that are not disks.
+            ("eclipse-java.tar.gz", "raw", None),
+            ("environment tools-20260908.zip", "raw", None),
+            ("virtualbox-7.2.deb", "raw", None),
+            ("unzipd.sh", "raw", None),
+            ("tahakhetib@mbptk.local", "raw", None),
+            ("noextension", "raw", None),
+        ];
+        for (name, format, expected) in cases {
+            assert_eq!(classify_volume(name, format, false), expected, "{name}");
+        }
+        assert_eq!(
+            classify_volume("sdb", "raw", true),
+            disk,
+            "block devices are disks"
+        );
+    }
 }

@@ -58,6 +58,12 @@ impl From<virt::error::Error> for ApiError {
             ErrorNumber::OperationInvalid => {
                 ApiError::Conflict("Operation not allowed in the current VM state".into())
             }
+            ErrorNumber::NoNetwork => ApiError::NotFound("Network not found".into()),
+            ErrorNumber::NoStoragePool => ApiError::NotFound("Storage pool not found".into()),
+            ErrorNumber::NoStorageVolume => ApiError::NotFound("Volume not found".into()),
+            ErrorNumber::StorageVolExist => {
+                ApiError::Conflict("A volume with this name already exists".into())
+            }
             ErrorNumber::DomExist => {
                 ApiError::Conflict("A VM with this name or UUID already exists".into())
             }

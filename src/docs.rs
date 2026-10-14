@@ -1,16 +1,12 @@
 use utoipa::OpenApi;
 
 use crate::{
-    common,
-    hypervisors,
-    infrastructure,
-    jobs,
+    common, hypervisors, infrastructure, jobs,
     models::{
-        CloneVm, CreateHypervisor, CreateVm, Disk, DiskRequest, Hypervisor, Message, Network,
-        NetworkRequest, UpdateHypervisor, VirtualMachine, VncResponse,
+        CloneVm, CreateHypervisor, CreateVm, Disk, DiskRequest, DiskSpec, Hypervisor, Message,
+        Network, NetworkRequest, UpdateHypervisor, VirtualMachine, VncResponse, VolumeRef,
     },
-    vm_options, vms,
-    vnc,
+    vm_options, vms, vnc,
 };
 
 #[derive(OpenApi)]
@@ -51,6 +47,8 @@ use crate::{
         CreateHypervisor,
         UpdateHypervisor,
         CreateVm,
+        DiskSpec,
+        VolumeRef,
         VirtualMachine,
         Disk,
         DiskRequest,

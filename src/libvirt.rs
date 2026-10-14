@@ -3,13 +3,14 @@ use std::collections::HashMap;
 use uuid::Uuid;
 
 use virt::{
-    connect::Connect, domain::Domain, error::ErrorNumber, storage_pool::StoragePool,
-    storage_vol::StorageVol, sys,
+    connect::Connect, domain::Domain, error::ErrorNumber, network::Network,
+    storage_pool::StoragePool, storage_vol::StorageVol, sys,
 };
 
 use crate::{
     errors::ApiError,
-    models::VirtualMachine,
+    models::{CreateVm, VirtualMachine},
+    vm_create,
     vm_options::{
         self, Defaults, Limits, NetworkOption, PoolOption, VmOptions, VolumeKind, VolumeOption,
     },
@@ -138,7 +139,7 @@ fn pool_option(
     })
 }
 
-/// `None` for entries that are not files or block devices (directories, for instance).
+/// `None` for entries that are neither a disk image nor an ISO (directories, archives...).
 fn volume_option(
     volume: &StorageVol,
     used_by: &HashMap<String, Vec<String>>,
@@ -149,18 +150,17 @@ fn volume_option(
     }
     let name = volume.get_name().map_err(volume_error)?;
     let format = vm_xml::volume_format(&volume.get_xml_desc(0).map_err(volume_error)?)?;
-    let is_iso = format == "iso" || name.to_lowercase().ends_with(".iso");
+    let is_block = info.kind == sys::VIR_STORAGE_VOL_BLOCK;
+    let Some(kind) = vm_options::classify_volume(&name, &format, is_block) else {
+        return Ok(None);
+    };
     let path = volume.get_path().map_err(volume_error)?;
     Ok(Some(VolumeOption {
         name,
         format,
         size_mb: info.capacity / MIB,
-        kind: if is_iso {
-            VolumeKind::Iso
-        } else {
-            VolumeKind::Disk
-        },
-        used_by: if is_iso {
+        kind,
+        used_by: if kind == VolumeKind::Iso {
             Vec::new()
         } else {
             used_by.get(&path).cloned().unwrap_or_default()
@@ -175,6 +175,216 @@ fn volume_error(e: virt::error::Error) -> ApiError {
     } else {
         e.into()
     }
+}
+
+/// Where a disk of the new VM comes from, resolved and checked before anything is created.
+enum DiskPlan {
+    New {
+        pool: StoragePool,
+        volume: String,
+        size_gb: u64,
+    },
+    Existing {
+        path: String,
+        format: String,
+    },
+}
+
+struct CreationPlan {
+    disks: Vec<DiskPlan>,
+    iso_path: Option<String>,
+    network: String,
+    kvm: bool,
+}
+
+/// Creates a VM (and the new disks it asks for) from a validated request. The VM is left
+/// stopped unless `start` is set. Nothing is left behind if the creation fails.
+pub async fn create_vm(
+    uri: String,
+    hypervisor_id: String,
+    request: CreateVm,
+    vnc_listen: String,
+) -> Result<VirtualMachine, ApiError> {
+    vm_create::validate(&request)?;
+    run_blocking(move || {
+        let conn = Connect::open(Some(&uri))?;
+        let plan = plan_creation(&conn, &request)?;
+
+        // Remember every volume we create, to delete them if the definition fails.
+        let mut created: Vec<StorageVol> = Vec::new();
+        let domain =
+            match create_volumes_and_define(&conn, &request, plan, &vnc_listen, &mut created) {
+                Ok(domain) => domain,
+                Err(error) => {
+                    for volume in &created {
+                        if let Err(e) = volume.delete(0) {
+                            eprintln!("Could not remove volume after a failed creation: {e}");
+                        }
+                    }
+                    return Err(error);
+                }
+            };
+
+        if request.start.unwrap_or(false)
+            && let Err(e) = domain.create()
+        {
+            eprintln!("Could not start the new VM: {e}");
+            return Err(ApiError::Internal(
+                "The VM was created but could not be started".into(),
+            ));
+        }
+        to_vm(&domain, &hypervisor_id)
+    })
+    .await
+}
+
+/// Checks everything the request depends on, without changing anything.
+fn plan_creation(conn: &Connect, request: &CreateVm) -> Result<CreationPlan, ApiError> {
+    if Domain::lookup_by_name(conn, &request.name).is_ok() {
+        return Err(ApiError::Conflict(
+            "A VM with this name already exists".into(),
+        ));
+    }
+    let network_name = request
+        .network
+        .clone()
+        .unwrap_or_else(|| vm_options::DEFAULT_NETWORK.to_string());
+    if !Network::lookup_by_name(conn, &network_name)?.is_active()? {
+        return Err(ApiError::Conflict("The network is not active".into()));
+    }
+
+    let in_use = disks_in_use(conn)?;
+    let mut disks = Vec::with_capacity(request.disks.len());
+    for (index, disk) in request.disks.iter().enumerate() {
+        let pool = active_pool(conn, &disk.pool)?;
+        match (disk.size_gb, &disk.volume) {
+            (Some(size_gb), _) => {
+                let volume = if index == 0 {
+                    format!("{}.qcow2", request.name)
+                } else {
+                    format!("{}-disk{index}.qcow2", request.name)
+                };
+                if StorageVol::lookup_by_name(&pool, &volume).is_ok() {
+                    return Err(ApiError::Conflict(format!(
+                        "A volume named {volume} already exists in pool {}",
+                        disk.pool
+                    )));
+                }
+                disks.push(DiskPlan::New {
+                    pool,
+                    volume,
+                    size_gb,
+                });
+            }
+            (None, Some(name)) => {
+                let (volume, format) = find_volume(&pool, name, VolumeKind::Disk)?;
+                let path = volume.get_path()?;
+                if in_use.contains_key(&path) {
+                    return Err(ApiError::Conflict(format!(
+                        "The disk {name} is already used by a VM"
+                    )));
+                }
+                disks.push(DiskPlan::Existing { path, format });
+            }
+            (None, None) => {
+                return Err(ApiError::BadRequest(
+                    "A disk needs a size or a volume".into(),
+                ));
+            }
+        }
+    }
+
+    let iso_path = match &request.iso {
+        Some(iso) => {
+            let pool = active_pool(conn, &iso.pool)?;
+            let (volume, _) = find_volume(&pool, &iso.volume, VolumeKind::Iso)?;
+            Some(volume.get_path()?)
+        }
+        None => None,
+    };
+
+    Ok(CreationPlan {
+        disks,
+        iso_path,
+        network: network_name,
+        kvm: conn.get_type()? == "QEMU",
+    })
+}
+
+fn active_pool(conn: &Connect, name: &str) -> Result<StoragePool, ApiError> {
+    let pool = StoragePool::lookup_by_name(conn, name)?;
+    if !pool.is_active()? {
+        return Err(ApiError::Conflict(format!(
+            "The storage pool {name} is not active"
+        )));
+    }
+    Ok(pool)
+}
+
+/// Finds a volume and checks it is the expected kind (disk image or ISO).
+fn find_volume(
+    pool: &StoragePool,
+    name: &str,
+    expected: VolumeKind,
+) -> Result<(StorageVol, String), ApiError> {
+    let volume = StorageVol::lookup_by_name(pool, name)?;
+    let info = volume.get_info()?;
+    let format = vm_xml::volume_format(&volume.get_xml_desc(0)?)?;
+    let is_block = info.kind == sys::VIR_STORAGE_VOL_BLOCK;
+    if vm_options::classify_volume(name, &format, is_block) != Some(expected) {
+        let wanted = if expected == VolumeKind::Iso {
+            "an ISO"
+        } else {
+            "a disk image"
+        };
+        return Err(ApiError::BadRequest(format!(
+            "The volume {name} is not {wanted}"
+        )));
+    }
+    Ok((volume, format))
+}
+
+fn create_volumes_and_define(
+    conn: &Connect,
+    request: &CreateVm,
+    plan: CreationPlan,
+    vnc_listen: &str,
+    created: &mut Vec<StorageVol>,
+) -> Result<Domain, ApiError> {
+    let mut attachments = Vec::with_capacity(plan.disks.len());
+    for disk in plan.disks {
+        match disk {
+            DiskPlan::New {
+                pool,
+                volume,
+                size_gb,
+            } => {
+                let xml = vm_xml::new_disk_volume_xml(&volume, size_gb)?;
+                let new_volume = StorageVol::create_xml(&pool, &xml, 0)?;
+                let path = new_volume.get_path()?;
+                created.push(new_volume);
+                attachments.push(vm_xml::DiskAttachment {
+                    path,
+                    format: "qcow2".into(),
+                });
+            }
+            DiskPlan::Existing { path, format } => {
+                attachments.push(vm_xml::DiskAttachment { path, format });
+            }
+        }
+    }
+    let spec = vm_xml::DomainSpec {
+        name: request.name.clone(),
+        memory_mb: request.memory_mb,
+        vcpus: request.vcpus,
+        kvm: plan.kvm,
+        uefi: request.firmware.as_deref() == Some("uefi"),
+        disks: attachments,
+        iso_path: plan.iso_path,
+        network: plan.network,
+        vnc_listen: vnc_listen.to_string(),
+    };
+    Ok(Domain::define_xml(conn, &vm_xml::new_domain_xml(&spec)?)?)
 }
 
 /// Reads one VM from its libvirt UUID.

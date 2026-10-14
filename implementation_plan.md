@@ -54,7 +54,7 @@ Les VM, disques et reseaux ne doivent pas etre stockes dans SQLite. Leur source 
 - [x] Lister les VM avec libvirt (service fait, handler `vms::list` branche, teste sur qemu+ssh).
 - [x] Lire les details d'une VM (service fait, handler `vms::get` branche, teste sur qemu+ssh).
 - [x] Endpoint `GET .../vm-options` : pools, volumes (disk/iso, `used_by`), reseaux, firmwares, bornes et valeurs par defaut pour l'interface de creation (`vm_options.rs`). A signaler au Developpeur 3 (recoupe disques/reseaux).
-- [ ] Creer une VM a partir d'une definition XML valide (disques neufs ET existants, ISO, reseau, firmware bios/uefi, VNC ; valider contre `vm_options`).
+- [x] Creer une VM : `POST .../vms` avec disques neufs ET existants, ISO, reseau, firmware bios/uefi, affichage VNC (`vm_create.rs`, `vm_xml.rs`, `libvirt::create_vm`), tests sur le pilote de test. A faire : tester sur qemu+ssh, valider `VNC_LISTEN` avec le Developpeur du VNC, ajouter formats de disque autres que qcow2, mot de passe VNC.
 - [x] Demarrer une VM avec `Domain::create` (teste sur qemu+ssh).
 - [x] Arreter proprement une VM avec `Domain::shutdown` (asynchrone, teste).
 - [x] Ajouter l'arret force avec `Domain::destroy` (`?force=true`, teste).

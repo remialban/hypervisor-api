@@ -672,3 +672,288 @@ async fn vm_options_of_an_unknown_hypervisor_is_404() {
         .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
+
+// ---------- create ----------
+
+impl TestApp {
+    async fn create(&self, body: Value) -> (StatusCode, Value) {
+        let (status, _, json) = self.send(Method::POST, &self.vms(), Some(body)).await;
+        (status, json)
+    }
+}
+
+fn domain_xml(name: &str) -> String {
+    Domain::lookup_by_name(&connect(), name)
+        .unwrap()
+        .get_xml_desc(0)
+        .unwrap()
+}
+
+#[tokio::test]
+async fn create_with_a_new_disk_builds_a_stopped_vm() {
+    let app = TestApp::new().await;
+    let name = unique("new");
+
+    let (status, vm) = app
+        .create(json!({
+            "name": name, "memory_mb": 128, "vcpus": 1,
+            "disks": [{ "pool": POOL, "size_gb": 2 }]
+        }))
+        .await;
+
+    assert_eq!(status, StatusCode::CREATED, "{vm}");
+    assert_eq!(vm["name"], name);
+    assert_eq!(vm["status"], "stopped");
+    assert_eq!(vm["memory_mb"], 128);
+    assert_eq!(vm["vcpus"], 1);
+    let disk = format!("/{POOL}/{name}.qcow2");
+    assert!(volume_exists(&disk), "the new disk was created");
+    assert!(domain_xml(&name).contains(&disk), "and attached");
+    assert!(
+        domain_xml(&name).contains("type='vnc'"),
+        "with a VNC display"
+    );
+    assert_eq!(
+        app.status_of(Method::GET, &app.vm(vm["id"].as_str().unwrap()))
+            .await
+            .0,
+        StatusCode::OK
+    );
+
+    // Deleting it with its disks leaves nothing behind.
+    let url = format!("{}?delete_disks=true", app.vm(vm["id"].as_str().unwrap()));
+    assert_eq!(
+        app.status_of(Method::DELETE, &url).await.0,
+        StatusCode::NO_CONTENT
+    );
+    assert!(!volume_exists(&disk));
+}
+
+#[tokio::test]
+async fn create_attaches_an_existing_disk_and_keeps_it_on_failure() {
+    let app = TestApp::new().await;
+    let disk_name = format!("{}.img", unique("existing"));
+    let disk = create_volume(&disk_name);
+
+    let (status, vm) = app
+        .create(json!({
+            "name": unique("exist"), "memory_mb": 128, "vcpus": 1,
+            "disks": [{ "pool": POOL, "volume": disk_name }]
+        }))
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{vm}");
+    assert!(domain_xml(vm["name"].as_str().unwrap()).contains(&disk));
+
+    // The disk is now taken: a second VM cannot use it, and the first one is untouched.
+    let (status, body) = app
+        .create(json!({
+            "name": unique("second"), "memory_mb": 128, "vcpus": 1,
+            "disks": [{ "pool": POOL, "volume": disk_name }]
+        }))
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert!(volume_exists(&disk));
+}
+
+#[tokio::test]
+async fn create_attaches_an_iso_and_can_start_the_vm() {
+    let app = TestApp::new().await;
+    let iso_name = format!("{}.iso", unique("install"));
+    let iso = create_volume(&iso_name);
+    let name = unique("withiso");
+
+    let (status, vm) = app
+        .create(json!({
+            "name": name, "memory_mb": 128, "vcpus": 1,
+            "disks": [{ "pool": POOL, "size_gb": 1 }],
+            "iso": { "pool": POOL, "volume": iso_name },
+            "start": true
+        }))
+        .await;
+
+    assert_eq!(status, StatusCode::CREATED, "{vm}");
+    assert_eq!(vm["status"], "running");
+    let xml = domain_xml(&name);
+    assert!(xml.contains(&iso));
+    assert!(xml.contains("device='cdrom'"));
+}
+
+#[tokio::test]
+async fn create_with_only_an_iso_is_allowed() {
+    let app = TestApp::new().await;
+    let iso_name = format!("{}.iso", unique("live"));
+    create_volume(&iso_name);
+
+    let (status, vm) = app
+        .create(json!({
+            "name": unique("live"), "memory_mb": 128, "vcpus": 1,
+            "iso": { "pool": POOL, "volume": iso_name }
+        }))
+        .await;
+
+    assert_eq!(status, StatusCode::CREATED, "{vm}");
+}
+
+#[tokio::test]
+async fn create_refuses_a_name_already_taken() {
+    let app = TestApp::new().await;
+    let taken = unique("taken");
+    define_vm(&taken, &[]);
+
+    let (status, _) = app
+        .create(json!({
+            "name": taken, "memory_mb": 128, "vcpus": 1,
+            "disks": [{ "pool": POOL, "size_gb": 1 }]
+        }))
+        .await;
+
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert!(
+        !volume_exists(&format!("/{POOL}/{taken}.qcow2")),
+        "no disk created"
+    );
+}
+
+#[tokio::test]
+async fn create_refuses_a_volume_name_already_taken() {
+    let app = TestApp::new().await;
+    let name = unique("clash");
+    create_volume(&format!("{name}.qcow2"));
+
+    let (status, body) = app
+        .create(json!({
+            "name": name, "memory_mb": 128, "vcpus": 1,
+            "disks": [{ "pool": POOL, "size_gb": 1 }]
+        }))
+        .await;
+
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+}
+
+#[tokio::test]
+async fn create_reports_unknown_pool_volume_and_network_as_404() {
+    let app = TestApp::new().await;
+    let cases = [
+        json!({ "disks": [{ "pool": "no-such-pool", "size_gb": 1 }] }),
+        json!({ "disks": [{ "pool": POOL, "volume": "no-such-volume.img" }] }),
+        json!({ "disks": [{ "pool": POOL, "size_gb": 1 }], "network": "no-such-network" }),
+        json!({ "iso": { "pool": POOL, "volume": "no-such.iso" } }),
+    ];
+    for case in cases {
+        let mut body = json!({ "name": unique("missing"), "memory_mb": 128, "vcpus": 1 });
+        body.as_object_mut()
+            .unwrap()
+            .extend(case.as_object().unwrap().clone());
+        let (status, response) = app.create(body.clone()).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{body} -> {response}");
+    }
+}
+
+#[tokio::test]
+async fn create_refuses_volumes_of_the_wrong_kind() {
+    let app = TestApp::new().await;
+    let iso_name = format!("{}.iso", unique("notadisk"));
+    let disk_name = format!("{}.img", unique("notaniso"));
+    create_volume(&iso_name);
+    create_volume(&disk_name);
+
+    let (status, _) = app
+        .create(json!({
+            "name": unique("a"), "memory_mb": 128, "vcpus": 1,
+            "disks": [{ "pool": POOL, "volume": iso_name }]
+        }))
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "an ISO is not a disk");
+
+    let (status, _) = app
+        .create(json!({
+            "name": unique("b"), "memory_mb": 128, "vcpus": 1,
+            "iso": { "pool": POOL, "volume": disk_name }
+        }))
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "a disk is not an ISO");
+}
+
+#[tokio::test]
+async fn a_failed_creation_leaves_no_disk_behind() {
+    let app = TestApp::new().await;
+    let name = unique("atomic");
+
+    // The second disk is invalid: nothing must be created for the first one either.
+    let (status, _) = app
+        .create(json!({
+            "name": name, "memory_mb": 128, "vcpus": 1,
+            "disks": [
+                { "pool": POOL, "size_gb": 1 },
+                { "pool": "no-such-pool", "size_gb": 1 }
+            ]
+        }))
+        .await;
+
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert!(!volume_exists(&format!("/{POOL}/{name}.qcow2")));
+    let (_, vms) = app.status_of(Method::GET, &app.vms()).await;
+    assert!(vms.as_array().unwrap().iter().all(|vm| vm["name"] != name));
+}
+
+#[tokio::test]
+async fn create_validates_the_request_before_touching_libvirt() {
+    let app = TestApp::new().await;
+    let invalid = [
+        json!({ "name": "../evil", "memory_mb": 128, "vcpus": 1, "disks": [{ "pool": POOL, "size_gb": 1 }] }),
+        json!({ "name": "ok", "memory_mb": 1, "vcpus": 1, "disks": [{ "pool": POOL, "size_gb": 1 }] }),
+        json!({ "name": "ok", "memory_mb": 128, "vcpus": 0, "disks": [{ "pool": POOL, "size_gb": 1 }] }),
+        json!({ "name": "ok", "memory_mb": 128, "vcpus": 1, "disks": [{ "pool": POOL, "size_gb": 99999 }] }),
+        json!({ "name": "ok", "memory_mb": 128, "vcpus": 1, "disks": [] }),
+        json!({ "name": "ok", "memory_mb": 128, "vcpus": 1, "disks": [{ "pool": POOL }] }),
+        json!({ "name": "ok", "memory_mb": 128, "vcpus": 1, "disks": [{ "pool": POOL, "size_gb": 1 }], "firmware": "coreboot" }),
+    ];
+    for body in invalid {
+        let (status, _) = app.create(body.clone()).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    }
+    // A body that is not the expected JSON is rejected by the framework.
+    let (status, _) = app.create(json!({ "name": "ok" })).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+#[tokio::test]
+async fn create_on_an_unknown_hypervisor_is_404() {
+    let app = TestApp::new().await;
+    let body = json!({ "name": "x", "memory_mb": 128, "vcpus": 1, "disks": [{ "pool": POOL, "size_gb": 1 }] });
+    let (status, _, _) = app
+        .send(Method::POST, "/api/hypervisors/unknown/vms", Some(body))
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn what_vm_options_offers_can_be_used_to_create_a_vm() {
+    let app = TestApp::new().await;
+    let (_, options) = app
+        .status_of(
+            Method::GET,
+            &format!("/api/hypervisors/{}/vm-options", app.hypervisor_id),
+        )
+        .await;
+    let network = options["networks"][0]["name"].as_str().unwrap().to_string();
+    let pool = options["storage_pools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["name"] == POOL)
+        .unwrap();
+
+    let (status, vm) = app
+        .create(json!({
+            "name": unique("roundtrip"),
+            "memory_mb": options["defaults"]["memory_mb"],
+            "vcpus": options["defaults"]["vcpus"],
+            "disks": [{ "pool": pool["name"], "size_gb": options["defaults"]["disk_gb"] }],
+            "network": network,
+            "firmware": options["defaults"]["firmware"]
+        }))
+        .await;
+
+    assert_eq!(status, StatusCode::CREATED, "{vm}");
+}
