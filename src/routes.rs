@@ -7,7 +7,9 @@ use crate::{
     common::ping,
     hypervisors,
     infrastructure,
+    jobs,
     state::SharedState,
+    vm_options,
     vms,
     vnc,
 };
@@ -63,5 +65,10 @@ pub fn create_routes(state: SharedState) -> Router {
             "/api/hypervisors/{hypervisor_id}/vms/{vm_id}/vnc",
             get(vnc::connect),
         )
+        .route(
+            "/api/hypervisors/{hypervisor_id}/vm-options",
+            get(vm_options::get),
+        )
+        .route("/api/jobs/{job_id}", get(jobs::get))
         .with_state(state)
 }

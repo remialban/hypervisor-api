@@ -40,22 +40,27 @@ Les VM, disques et reseaux ne doivent pas etre stockes dans SQLite. Leur source 
 - [x] Compilation verifiee avec `cargo check`.
 - [x] Identifiants, champs, fonctions, messages et descriptions OpenAPI du code source passes en anglais.
 - [x] Workflow GitHub Actions ajoute pour verifier chaque `push` et `pull_request`.
+- [x] CI : installation de `libvirt-dev` avant la compilation (sinon `virt-sys` ne compile pas sur `ubuntu-latest`).
+- [x] Type d'erreur `ApiError` (`errors.rs`) avec conversion des erreurs libvirt en codes HTTP.
+- [x] Jobs asynchrones en memoire (`jobs.rs`, `GET /api/jobs/{job_id}`) pour les operations longues. A faire : persistance, annulation, limite de concurrence.
+- [x] Module `libvirt.rs` : lecture de l'URI depuis SQLite, `list_vms` et `get_vm` (branches dans `vms::list` et `vms::get`).
 
 ## Reste a faire
 
 ### Priorite 1 : libvirt pour les VM
 
-- [ ] Creer un service libvirt dedie, separe des handlers HTTP.
-- [ ] Ouvrir la connexion vers l'hyperviseur selectionne depuis son URI SQLite.
-- [ ] Lister les VM avec libvirt.
-- [ ] Lire les details d'une VM.
-- [ ] Creer une VM a partir d'une definition XML valide.
-- [ ] Demarrer une VM avec `Domain::create`.
-- [ ] Arreter proprement une VM avec `Domain::shutdown`.
-- [ ] Ajouter l'arret force avec `Domain::destroy` si necessaire.
-- [ ] Cloner une VM avec une nouvelle definition XML et ses disques.
-- [ ] Supprimer une VM avec confirmation explicite.
-- [ ] Ajouter des tests avec un faux service libvirt ou une couche mockable.
+- [x] Creer un service libvirt dedie, separe des handlers HTTP (`libvirt.rs`, a transformer en trait pour les tests).
+- [x] Ouvrir la connexion vers l'hyperviseur selectionne depuis son URI SQLite (`hypervisor_uri` + `Connect::open`, a coordonner avec le Developpeur 1).
+- [x] Lister les VM avec libvirt (service fait, handler `vms::list` branche, teste sur qemu+ssh).
+- [x] Lire les details d'une VM (service fait, handler `vms::get` branche, teste sur qemu+ssh).
+- [x] Endpoint `GET .../vm-options` : pools, volumes (disk/iso, `used_by`), reseaux, firmwares, bornes et valeurs par defaut pour l'interface de creation (`vm_options.rs`). A signaler au Developpeur 3 (recoupe disques/reseaux).
+- [x] Creer une VM : `POST .../vms` avec disques neufs ET existants, ISO, reseau, firmware bios/uefi, affichage VNC (`vm_create.rs`, `vm_xml.rs`, `libvirt::create_vm`), tests sur le pilote de test. A faire : tester sur qemu+ssh, valider `VNC_LISTEN` avec le Developpeur du VNC, ajouter formats de disque autres que qcow2, mot de passe VNC.
+- [x] Demarrer une VM avec `Domain::create` (teste sur qemu+ssh).
+- [x] Arreter proprement une VM avec `Domain::shutdown` (asynchrone, teste).
+- [x] Ajouter l'arret force avec `Domain::destroy` (`?force=true`, teste).
+- [x] Cloner une VM avec une nouvelle definition XML et ses disques (asynchrone via `jobs.rs`, teste sur qemu+ssh).
+- [x] Supprimer une VM (`Domain::undefine_flags`, disques conserves par defaut, `?delete_disks=true` explicite, refus si disque partage, teste sur qemu+ssh).
+- [x] Ajouter des tests des routes VM sans hyperviseur reel : `src/http_tests.rs` utilise le pilote en memoire `test:///default` de libvirt (list, get, start, stop, delete, clone, jobs ; 30 tests HTTP + tests unitaires de `jobs.rs`, `errors.rs`, `vm_xml.rs`).
 
 ### Priorite 2 : disques et reseaux libvirt
 
@@ -87,10 +92,10 @@ Les VM, disques et reseaux ne doivent pas etre stockes dans SQLite. Leur source 
 
 ### Priorite 5 : qualite et exploitation
 
-- [ ] Installer `rustfmt` localement et appliquer `cargo fmt`.
+- [ ] Appliquer `cargo fmt` a tout le projet (la CI echoue deja sur `cargo fmt --check` : `common.rs`, `docs.rs`, `hypervisors.rs`, `infrastructure.rs`, `main.rs`, `routes.rs`, `state.rs`, `vms.rs`, `vnc.rs`). Les fichiers `errors.rs`, `jobs.rs`, `libvirt.rs`, `vm_xml.rs` et `http_tests.rs` sont deja formates.
 - [ ] Ajouter des tests unitaires pour les modeles et services.
-- [ ] Ajouter des tests HTTP pour chaque route.
-- [ ] Ajouter un environnement de test libvirt ou des mocks.
+- [ ] Ajouter des tests HTTP pour chaque route (fait pour les routes VM et jobs ; reste hyperviseurs, disques, reseaux, VNC).
+- [x] Ajouter un environnement de test libvirt : pilote `test:///default` (etat global au processus : chaque test cree ses propres VM et volumes avec des noms uniques).
 - [ ] Ajouter une configuration par variables d'environnement.
 - [ ] Remplacer l'URI SQLite en dur par `DATABASE_URL`.
 - [ ] Ajouter des migrations SQL versionnees.

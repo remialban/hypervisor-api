@@ -11,9 +11,9 @@ post {
 }
 
 assert {
-  res.status: eq 501
+  res.status: eq 200
 }
 
 docs {
-  Not implemented yet: the API returns 501 {status:"not_implemented",content}. Update the assertion once libvirt is wired.
+  Starts a stopped VM and returns it with its new state. 409 if the VM is already running.
 }

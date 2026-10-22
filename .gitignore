@@ -16,6 +16,7 @@
 .idea/
 .DS_Store
 
+vm.cfg
 # Bruno collection (docs/bruno): local secrets and tooling output
 # Environment files in docs/bruno/environments/ are committed on purpose (no secrets, variables only)
 docs/bruno/.env

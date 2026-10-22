@@ -1,15 +1,12 @@
 use utoipa::OpenApi;
 
 use crate::{
-    common,
-    hypervisors,
-    infrastructure,
+    common, hypervisors, infrastructure, jobs,
     models::{
-        CreateHypervisor, CreateVm, Disk, DiskRequest, Hypervisor, Message, Network,
-        NetworkRequest, UpdateHypervisor, VirtualMachine,
+        CloneVm, CreateHypervisor, CreateVm, Disk, DiskRequest, DiskSpec, Hypervisor, Message,
+        Network, NetworkRequest, UpdateHypervisor, VirtualMachine, VncResponse, VolumeRef,
     },
-    vms,
-    vnc,
+    vm_options, vms, vnc,
 };
 
 #[derive(OpenApi)]
@@ -40,7 +37,9 @@ use crate::{
         infrastructure::delete_disk,
         infrastructure::list_networks,
         infrastructure::create_network,
-        vnc::connect
+        vnc::connect,
+        jobs::get,
+        vm_options::get
     ),
     components(schemas(
         Message,
@@ -48,15 +47,30 @@ use crate::{
         CreateHypervisor,
         UpdateHypervisor,
         CreateVm,
+        DiskSpec,
+        VolumeRef,
         VirtualMachine,
         Disk,
         DiskRequest,
         Network,
-        NetworkRequest
+        NetworkRequest,
+        VncResponse,
+        CloneVm,
+        jobs::Job,
+        jobs::JobStatus,
+        vm_options::VmOptions,
+        vm_options::PoolOption,
+        vm_options::VolumeOption,
+        vm_options::VolumeKind,
+        vm_options::NetworkOption,
+        vm_options::Range,
+        vm_options::Limits,
+        vm_options::Defaults
     )),
     tags(
         (name = "Hypervisors", description = "Hypervisor management"),
         (name = "VMs", description = "Virtual machine management"),
+        (name = "Jobs", description = "Background operations"),
         (name = "Infrastructure", description = "Disks, networks and VNC")
     )
 )]

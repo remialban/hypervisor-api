@@ -1,0 +1,33 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      DATABASE_URL: sqlite:///data/api.db?mode=rwc
+      VM_CONFIG_PATH: /data/vm.cfg
+      SSH_PRIVATE_KEY_PATH: /run/secrets/ssh_private_key
+      NOVNC_URL: ${NOVNC_URL:-http://localhost:6080/vnc.html}
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./data:/data
+      - ./vm.cfg:/data/vm.cfg
+      - /var/run/libvirt/libvirt-sock:/var/run/libvirt/libvirt-sock
+      - ${SSH_PRIVATE_KEY_HOST_PATH:?SSH_PRIVATE_KEY_HOST_PATH doit pointer vers la clé privée}:/run/secrets/ssh_private_key:ro
+    restart: unless-stopped
+
+  novnc:
+    build:
+      context: .
+      dockerfile: Dockerfile.novnc
+    environment:
+      VM_CONFIG_PATH: /data/vm.cfg
+    ports:
+      - "6080:6080"
+    volumes:
+      - ./data:/data
+      - ./vm.cfg:/data/vm.cfg
+    depends_on:
+      - api
+    restart: unless-stopped

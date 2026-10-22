@@ -1,10 +1,18 @@
 mod common;
 mod docs;
+mod errors;
+#[cfg(test)]
+mod http_tests;
 mod hypervisors;
 mod infrastructure;
+mod jobs;
+mod libvirt;
 mod models;
 mod routes;
 mod state;
+mod vm_create;
+mod vm_options;
+mod vm_xml;
 mod vms;
 mod vnc;
 
@@ -22,8 +30,7 @@ async fn main() {
             .expect("Could not initialize the SQLite database"),
     );
     let app = routes::create_routes(state).merge(
-        SwaggerUi::new("/swagger-ui")
-            .url("/api-docs/openapi.json", docs::ApiDoc::openapi()),
+        SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", docs::ApiDoc::openapi()),
     );
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000")
         .await
@@ -33,6 +40,4 @@ async fn main() {
     axum::serve(listener, app)
         .await
         .expect("Server execution failed");
-
-        
 }
