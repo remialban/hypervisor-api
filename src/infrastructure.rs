@@ -2,10 +2,9 @@ use axum::{extract::{Path,State}, http::StatusCode, Json};
 use std::path::Path as FilePath;
 use xmltree::{Element, XMLNode};
 
-use crate::{common::{error_response, not_implemented}, models::{Disk, DiskRequest, DiskUpdateRequest, Message, NetworkRequest, StoragePool, StoragePoolRequest},
+use crate::{common::error_response, models::{Disk, DiskRequest, DiskUpdateRequest, Message, Network, NetworkRequest, StoragePool, StoragePoolRequest},
 state::SharedState};
 
-type ApiResponse = (StatusCode, Json<Message>);
 type ApiError = (StatusCode, Json<Message>);
 
 const DEFAULT_STORAGE_POOL: &str = "default-pool";
@@ -344,19 +343,177 @@ pub async fn update_disk(
     Ok(Json(disk))
 }
 
-#[utoipa::path(delete, path = "/api/hypervisors/{hypervisor_id}/disks/{disk_id}", params(("hypervisor_id" = String, Path), ("disk_id" = String, Path)), responses((status = 501, body = Message)), tag = "Infrastructure")]
-pub async fn delete_disk(Path((_hypervisor_id, _disk_id)): Path<(String, String)>) -> ApiResponse {
-    not_implemented("Disk deletion will be connected to libvirt")
+fn delete_disk_from_libvirt(uri: &str, disk_id: &str) -> Result<bool, virt::error::Error> {
+    let connection = virt::connect::Connect::open(Some(uri))?;
+    for pool in connection.list_all_storage_pools(0)? {
+        for volume in pool.list_all_volumes(0)? {
+            if volume.get_key()? == disk_id {
+                volume.delete(0)?;
+                return Ok(true);
+            }
+        }
+    }
+
+    Ok(false)
 }
 
-#[utoipa::path(get, path = "/api/hypervisors/{hypervisor_id}/networks", params(("hypervisor_id" = String, Path)), responses((status = 501, body = Message)), tag = "Infrastructure")]
-pub async fn list_networks(Path(_hypervisor_id): Path<String>) -> ApiResponse {
-    not_implemented("Network listing will be connected to libvirt; networks are not stored in SQLite")
+#[utoipa::path(delete, path = "/api/hypervisors/{hypervisor_id}/disks/{disk_id}", params(("hypervisor_id" = String, Path), ("disk_id" = String, Path)), responses((status = 204), (status = 404, body = Message), (status = 500, body = Message), (status = 501, body = Message), (status = 502, body = Message)), tag = "Infrastructure")]
+pub async fn delete_disk(
+    State(state): State<SharedState>,
+    Path((hypervisor_id, disk_id)): Path<(String, String)>,
+) -> Result<StatusCode, ApiError> {
+    let uri = get_hypervisor_uri(&state, &hypervisor_id).await?;
+    let deleted = tokio::task::spawn_blocking(move || delete_disk_from_libvirt(&uri, &disk_id))
+        .await
+        .map_err(|_| error_response(StatusCode::INTERNAL_SERVER_ERROR, "Tâche bloquée en échec"))?
+        .map_err(|error| match error.code() {
+            virt::error::ErrorNumber::NoSupport
+            | virt::error::ErrorNumber::ArgumentUnsupported
+            | virt::error::ErrorNumber::OperationUnsupported => {
+                eprintln!("delete_disk unsupported: {error}");
+                error_response(
+                    StatusCode::NOT_IMPLEMENTED,
+                    "Le pilote libvirt ne prend pas en charge la suppression des volumes",
+                )
+            }
+            _ => {
+                eprintln!("delete_disk libvirt error: {error}");
+                error_response(StatusCode::BAD_GATEWAY, "Erreur libvirt")
+            }
+        })?;
+
+    if !deleted {
+        return Err(error_response(StatusCode::NOT_FOUND, "Disque non trouvé"));
+    }
+
+    Ok(StatusCode::NO_CONTENT)
 }
 
-#[utoipa::path(post, path = "/api/hypervisors/{hypervisor_id}/networks", params(("hypervisor_id" = String, Path)), request_body = NetworkRequest, responses((status = 501, body = Message)), tag = "Infrastructure")]
-pub async fn create_network(Path(_hypervisor_id): Path<String>, Json(body): Json<NetworkRequest>) -> ApiResponse {
-    let _ = (body.name, body.bridge);
-    not_implemented("Network creation will be connected to libvirt; networks are not stored in SQLite")
+fn list_networks_from_libvirt(
+    uri: &str,
+    hypervisor_id: &str,
+) -> Result<Vec<Network>, virt::error::Error> {
+    let connection = virt::connect::Connect::open(Some(uri))?;
+    connection
+        .list_all_networks(0)?
+        .iter()
+        .map(|network| {
+            Ok(Network {
+                id: network.get_uuid_string()?,
+                hypervisor_id: hypervisor_id.to_owned(),
+                name: network.get_name()?,
+                bridge: network.get_bridge_name().ok(),
+                status: if network.is_active()? {
+                    "active".to_owned()
+                } else {
+                    "inactive".to_owned()
+                },
+            })
+        })
+        .collect()
+}
+
+#[utoipa::path(get, path = "/api/hypervisors/{hypervisor_id}/networks", params(("hypervisor_id" = String, Path)), responses((status = 200, body = [Network]), (status = 404, body = Message), (status = 500, body = Message), (status = 502, body = Message)), tag = "Infrastructure")]
+pub async fn list_networks(
+    State(state): State<SharedState>,
+    Path(hypervisor_id): Path<String>,
+) -> Result<Json<Vec<Network>>, ApiError> {
+    let uri = get_hypervisor_uri(&state, &hypervisor_id).await?;
+    let networks = tokio::task::spawn_blocking(move || {
+        list_networks_from_libvirt(&uri, &hypervisor_id)
+    })
+    .await
+    .map_err(|_| error_response(StatusCode::INTERNAL_SERVER_ERROR, "Tâche bloquée en échec"))?
+    .map_err(|error| {
+        eprintln!("list_networks libvirt error: {error}");
+        error_response(StatusCode::BAD_GATEWAY, "Erreur libvirt")
+    })?;
+
+    Ok(Json(networks))
+}
+
+#[utoipa::path(post, path = "/api/hypervisors/{hypervisor_id}/networks", params(("hypervisor_id" = String, Path)), request_body = NetworkRequest, responses((status = 201, body = Network), (status = 400, body = Message), (status = 404, body = Message), (status = 409, body = Message), (status = 500, body = Message), (status = 501, body = Message), (status = 502, body = Message)), tag = "Infrastructure")]
+pub async fn create_network(
+    State(state): State<SharedState>,
+    Path(hypervisor_id): Path<String>,
+    Json(body): Json<NetworkRequest>,
+) -> Result<(StatusCode, Json<Network>), ApiError> {
+    let valid_name = !body.name.is_empty()
+        && body.name.len() <= 64
+        && !body.name.starts_with('.')
+        && body.name.chars().all(|character| {
+            character.is_ascii_alphanumeric() || "-_.".contains(character)
+        });
+    if !valid_name {
+        return Err(error_response(StatusCode::BAD_REQUEST, "Nom de réseau invalide"));
+    }
+    if body.bridge.as_ref().is_some_and(|bridge| {
+        bridge.is_empty()
+            || bridge.len() > 15
+            || !bridge.chars().all(|character| {
+                character.is_ascii_alphanumeric() || "-_.".contains(character)
+            })
+    }) {
+        return Err(error_response(StatusCode::BAD_REQUEST, "Nom de bridge invalide"));
+    }
+
+    let mut xml_root = Element::new("network");
+    let mut name = Element::new("name");
+    name.children.push(XMLNode::Text(body.name));
+    xml_root.children.push(XMLNode::Element(name));
+    if let Some(bridge_name) = body.bridge {
+        let mut bridge = Element::new("bridge");
+        bridge.attributes.insert("name".to_owned(), bridge_name);
+        xml_root.children.push(XMLNode::Element(bridge));
+    }
+
+    let mut xml_bytes = Vec::new();
+    xml_root.write(&mut xml_bytes).map_err(|_| {
+        error_response(StatusCode::INTERNAL_SERVER_ERROR, "Erreur génération XML du réseau")
+    })?;
+    let xml = String::from_utf8(xml_bytes).map_err(|_| {
+        error_response(StatusCode::INTERNAL_SERVER_ERROR, "XML du réseau invalide")
+    })?;
+    let uri = get_hypervisor_uri(&state, &hypervisor_id).await?;
+
+    let network = tokio::task::spawn_blocking(move || {
+        let connection = virt::connect::Connect::open(Some(&uri))?;
+        let network = virt::network::Network::define_xml(&connection, &xml)?;
+        network.create()?;
+
+        Ok::<Network, virt::error::Error>(Network {
+            id: network.get_uuid_string()?,
+            hypervisor_id,
+            name: network.get_name()?,
+            bridge: network.get_bridge_name().ok(),
+            status: if network.is_active()? {
+                "active".to_owned()
+            } else {
+                "inactive".to_owned()
+            },
+        })
+    })
+    .await
+    .map_err(|_| error_response(StatusCode::INTERNAL_SERVER_ERROR, "Tâche de création en échec"))?
+    .map_err(|error| match error.code() {
+        virt::error::ErrorNumber::NetworkExist => {
+            error_response(StatusCode::CONFLICT, "Un réseau portant ce nom existe déjà")
+        }
+        virt::error::ErrorNumber::NoSupport
+        | virt::error::ErrorNumber::ArgumentUnsupported
+        | virt::error::ErrorNumber::OperationUnsupported => {
+            eprintln!("create_network unsupported: {error}");
+            error_response(
+                StatusCode::NOT_IMPLEMENTED,
+                "Le pilote libvirt ne prend pas en charge la création de réseaux",
+            )
+        }
+        _ => {
+            eprintln!("create_network libvirt error: {error}");
+            error_response(StatusCode::BAD_GATEWAY, "Erreur libvirt")
+        }
+    })?;
+
+    Ok((StatusCode::CREATED, Json(network)))
 }
 
