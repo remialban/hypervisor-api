@@ -102,6 +102,8 @@ PATCH  /api/hypervisors/{hypervisor_id}/disks/{disk_id}
 DELETE /api/hypervisors/{hypervisor_id}/disks/{disk_id}
 ```
 
+`GET .../disks/{disk_id}` lit un volume libvirt a partir de sa cle (`disk_id`) et renvoie un `Disk` (200), 404 si le volume est absent, ou 502 en cas d'erreur libvirt.
+
 Corps prevu :
 
 ```json

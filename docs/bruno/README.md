@@ -19,7 +19,8 @@ No formal contract exists yet: this collection is the working draft that will he
 | `apiPrefix` | Prefix of all resource routes (`/ping` is outside it) | `/api` |
 | `libvirtUri` | libvirt URI sent when creating a hypervisor | `test:///default` (libvirt mock driver, no KVM needed) |
 | `hypervisorId` | Set automatically by *Create hypervisor* | empty |
-| `vmId`, `diskId`, `networkId` | Fill in by hand (or set via scripts) once those endpoints are implemented | empty |
+| `vmId`, `networkId` | Fill in by hand (or set via scripts) once those endpoints are implemented | empty |
+| `diskId` | Set automatically by **Create disk** from the returned libvirt key (URL-encoded for the path) | empty |
 | `missingId` | An id that never exists, used by the *Error cases* folder | all-zero UUID |
 
 To target another API instance, duplicate an environment file and change `baseUrl`. `remote-kvm` is a template for a real host (`qemu+ssh://...`).

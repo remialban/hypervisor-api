@@ -217,9 +217,45 @@ pub async fn create_disk(
     Ok((StatusCode::CREATED, Json(disk)))
 }
 
-#[utoipa::path(get, path = "/api/hypervisors/{hypervisor_id}/disks/{disk_id}", params(("hypervisor_id" = String, Path), ("disk_id" = String, Path)), responses((status = 501, body = Message)), tag = "Infrastructure")]
-pub async fn get_disk(Path((_hypervisor_id, _disk_id)): Path<(String, String)>) -> ApiResponse {
-    not_implemented("Disk reading will be connected to libvirt")
+fn get_disk_from_libvirt(
+    uri: &str,
+    hypervisor_id: &str,
+    disk_id: &str,
+) -> Result<Disk, virt::error::Error> {
+    let connection = virt::connect::Connect::open(Some(uri))?;
+    let volume = virt::storage_vol::StorageVol::lookup_by_key(&connection, disk_id)?;
+    let info = volume.get_info()?;
+
+    Ok(Disk {
+        id: volume.get_key()?,
+        hypervisor_id: hypervisor_id.to_owned(),
+        name: volume.get_name()?,
+        size_gb: (info.capacity / 1_073_741_824) as i64,
+        format: "unknown".to_owned(),
+    })
+}
+
+#[utoipa::path(get, path = "/api/hypervisors/{hypervisor_id}/disks/{disk_id}", params(("hypervisor_id" = String, Path), ("disk_id" = String, Path)), responses((status = 200, body = Disk), (status = 404, body = Message), (status = 500, body = Message), (status = 502, body = Message)), tag = "Infrastructure")]
+pub async fn get_disk(
+    State(state): State<SharedState>,
+    Path((hypervisor_id, disk_id)): Path<(String, String)>,
+) -> Result<Json<Disk>, ApiError> {
+    let uri = get_hypervisor_uri(&state, &hypervisor_id).await?;
+    let disk = tokio::task::spawn_blocking(move || {
+        get_disk_from_libvirt(&uri, &hypervisor_id, &disk_id)
+    })
+    .await
+    .map_err(|_| error_response(StatusCode::INTERNAL_SERVER_ERROR, "Tâche bloquée en échec"))?
+    .map_err(|error| {
+        if error.code() == virt::error::ErrorNumber::NoStorageVolume {
+            error_response(StatusCode::NOT_FOUND, "Disque non trouvé")
+        } else {
+            eprintln!("get_disk libvirt error: {error}");
+            error_response(StatusCode::BAD_GATEWAY, "Erreur libvirt")
+        }
+    })?;
+
+    Ok(Json(disk))
 }
 
 #[utoipa::path(patch, path = "/api/hypervisors/{hypervisor_id}/disks/{disk_id}", params(("hypervisor_id" = String, Path), ("disk_id" = String, Path)), request_body = DiskRequest, responses((status = 501, body = Message)), tag = "Infrastructure")]

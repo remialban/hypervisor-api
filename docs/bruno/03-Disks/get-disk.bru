@@ -11,9 +11,9 @@ get {
 }
 
 assert {
-  res.status: eq 501
+  res.status: eq 200
 }
 
 docs {
-  Planned: Disk. Not implemented yet: the API returns 501 {status:"not_implemented",content}. Update the assertion once libvirt is wired.
+  Reads the volume created by Create disk using the diskId runtime variable.
 }
