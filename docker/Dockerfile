@@ -1,0 +1,21 @@
+FROM debian:trixie-slim
+
+# Installation de websockify et noVNC
+RUN apt-get update && apt-get install -y \
+    novnc \
+    websockify \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Création du dossier et du fichier pour stocker la correspondance token/VM
+RUN mkdir -p /etc/novnc && touch /etc/novnc/vm.cfg
+
+# Création d'un lien symbolique pour que la racine web pointe directement sur vnc.html
+RUN ln -sf /usr/share/novnc/vnc.html /usr/share/novnc/index.html
+
+# Port par défaut de noVNC / websockify
+EXPOSE 6080
+
+# Commande pour démarrer websockify avec authentification par token
+CMD ["websockify", "--token-plugin", "TokenFile", "--token-source", "/etc/novnc/vm.cfg", "6080", "--web", "/usr/share/novnc"]
+
