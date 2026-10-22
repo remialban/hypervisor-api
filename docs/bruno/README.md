@@ -19,7 +19,8 @@ No formal contract exists yet: this collection is the working draft that will he
 | `apiPrefix` | Prefix of all resource routes (`/ping` is outside it) | `/api` |
 | `libvirtUri` | libvirt URI sent when creating a hypervisor | `test:///default` (libvirt mock driver, no KVM needed) |
 | `hypervisorId` | Set automatically by *Create hypervisor* | empty |
-| `vmId`, `diskId`, `networkId` | Fill in by hand (or set via scripts) once those endpoints are implemented | empty |
+| `vmId`, `networkId` | Fill in by hand (or set via scripts) once those endpoints are implemented | empty |
+| `diskId` | Set automatically by **Create disk** from the returned libvirt key (URL-encoded for the path) | empty |
 | `missingId` | An id that never exists, used by the *Error cases* folder | all-zero UUID |
 
 To target another API instance, duplicate an environment file and change `baseUrl`. `remote-kvm` is a template for a real host (`qemu+ssh://...`).
@@ -30,7 +31,8 @@ No secrets are needed today. If auth is added, use `{{process.env.NAME}}` with a
 | Folder | State |
 |---|---|
 | Health, Hypervisors | Implemented (SQLite + libvirt connection test) |
-| VMs, Disks, Networks, VNC (own Swagger tag and folder) | Return `501 {"status":"not_implemented","content":...}`. Assertions expect 501 for now. |
+| Storage pools in Disks | List and create pools through libvirt. |
+| VMs, Disks, Networks, VNC | Other operations still return `501 {"status":"not_implemented","content":...}` where not implemented. |
 | Error cases | 502 unreachable URI, 404 unknown id, 422 invalid body (framework message, plain text, not a `Message`) |
 
 When an endpoint gets implemented, change its `assert` status and body in the `.bru` file.

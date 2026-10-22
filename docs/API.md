@@ -110,7 +110,7 @@ Corps de la creation (`POST /api/hypervisors/{hypervisor_id}/vms`) :
 
 ## Disques
 
-Les routes disques sont exposees, mais ne stockent rien dans SQLite et repondent actuellement `501 Not Implemented`.
+Les disques et les pools sont geres directement par libvirt, sans stockage dans SQLite.
 
 ```text
 GET    /api/hypervisors/{hypervisor_id}/disks
@@ -119,6 +119,12 @@ GET    /api/hypervisors/{hypervisor_id}/disks/{disk_id}
 PATCH  /api/hypervisors/{hypervisor_id}/disks/{disk_id}
 DELETE /api/hypervisors/{hypervisor_id}/disks/{disk_id}
 ```
+
+`GET .../disks/{disk_id}` lit un volume libvirt a partir de sa cle (`disk_id`) et renvoie un `Disk` (200), 404 si le volume est absent, ou 502 en cas d'erreur libvirt.
+
+`PATCH .../disks/{disk_id}` accepte `{"size_gb":40}` et redimensionne le volume (200 avec le `Disk` mis a jour). La reduction de capacite est refusee (400) pour eviter une perte de donnees ; le nom et le format ne sont pas modifiables par cette route. Un pilote qui ne prend pas en charge cette operation renvoie `501`, notamment le pilote de test `test:///default`.
+
+`DELETE .../disks/{disk_id}` supprime le volume libvirt identifie par sa cle et renvoie `204` sans corps. La route renvoie `404` si le volume est absent, `501` si le pilote ne prend pas en charge la suppression, ou `502` en cas d'autre erreur libvirt. Cette operation supprime les donnees du volume.
 
 Corps prevu :
 
@@ -130,9 +136,29 @@ Corps prevu :
 }
 ```
 
+### Pools de stockage
+
+Les pools sont rattaches a un hyperviseur et listes/crees via libvirt. La creation definit un pool de type `dir`, construit le repertoire cible et demarre le pool.
+
+```text
+GET  /api/hypervisors/{hypervisor_id}/pools
+POST /api/hypervisors/{hypervisor_id}/pools
+```
+
+Corps de creation :
+
+```json
+{
+  "name": "default",
+  "target_path": "/tmp/libvirt-pools/default"
+}
+```
+
+La reponse de pool contient son UUID `id`, son `hypervisor_id`, son `name` et son etat `active`.
+
 ## Reseaux
 
-Les routes reseaux sont exposees, mais ne stockent rien dans SQLite et repondent actuellement `501 Not Implemented`.
+Les réseaux sont lus et créés directement dans libvirt, sans stockage SQLite. La liste renvoie les réseaux actifs ou inactifs de l’hyperviseur. La création définit puis démarre un réseau isolé ; le champ `bridge` est facultatif.
 
 ```text
 GET  /api/hypervisors/{hypervisor_id}/networks
@@ -143,10 +169,11 @@ Corps prevu :
 
 ```json
 {
-  "name": "reseau-test",
-  "bridge": "virbr10"
+  "name": "reseau-test"
 }
 ```
+
+La création peut aussi préciser un nom de bridge, par exemple `"bridge":"virbr10"`. La réponse contient l’UUID `id`, le `hypervisor_id`, le nom, le bridge éventuel et le statut (`active` ou `inactive`).
 
 ## VNC
 

@@ -3,8 +3,9 @@ use utoipa::OpenApi;
 use crate::{
     common, hypervisors, infrastructure, jobs,
     models::{
-        CloneVm, CreateHypervisor, CreateVm, Disk, DiskRequest, DiskSpec, Hypervisor, Message,
-        Network, NetworkRequest, UpdateHypervisor, VirtualMachine, VncResponse, VolumeRef,
+        CloneVm, CreateHypervisor, CreateVm, Disk, DiskRequest, DiskSpec, DiskUpdateRequest,
+        Hypervisor, Message, Network, NetworkRequest, StoragePool, StoragePoolRequest,
+        UpdateHypervisor, VirtualMachine, VncResponse, VolumeRef,
     },
     vm_options, vms, vnc,
 };
@@ -32,6 +33,8 @@ use crate::{
         vms::delete,
         infrastructure::list_disks,
         infrastructure::create_disk,
+        infrastructure::list_pools,
+        infrastructure::create_pools,
         infrastructure::get_disk,
         infrastructure::update_disk,
         infrastructure::delete_disk,
@@ -52,6 +55,9 @@ use crate::{
         VirtualMachine,
         Disk,
         DiskRequest,
+        DiskUpdateRequest,
+        StoragePool,
+        StoragePoolRequest,
         Network,
         NetworkRequest,
         VncResponse,

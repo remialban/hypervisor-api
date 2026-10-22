@@ -11,9 +11,9 @@ delete {
 }
 
 assert {
-  res.status: eq 501
+  res.status: eq 204
 }
 
 docs {
-  Not implemented yet: the API returns 501 {status:"not_implemented",content}. Update the assertion once libvirt is wired.
+  Deletes the selected volume. Run after other disk requests because the volume is permanently removed.
 }

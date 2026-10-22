@@ -87,6 +87,11 @@ pub struct DiskRequest {
     pub format: String,
 }
 
+#[derive(Deserialize, ToSchema)]
+pub struct DiskUpdateRequest {
+    pub size_gb: u64,
+}
+
 #[derive(Clone, Serialize, ToSchema, FromRow)]
 pub struct Disk {
     pub id: String,
@@ -94,6 +99,20 @@ pub struct Disk {
     pub name: String,
     pub size_gb: i64,
     pub format: String,
+}
+
+#[derive(Clone, Serialize, ToSchema)]
+pub struct StoragePool {
+    pub id: String,
+    pub hypervisor_id: String,
+    pub name: String,
+    pub active: bool,
+}
+
+#[derive(Deserialize, ToSchema)]
+pub struct StoragePoolRequest {
+    pub name: String,
+    pub target_path: String,
 }
 
 #[derive(Clone, Serialize, ToSchema, FromRow)]
