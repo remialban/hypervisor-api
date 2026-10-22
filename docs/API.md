@@ -104,6 +104,8 @@ DELETE /api/hypervisors/{hypervisor_id}/disks/{disk_id}
 
 `GET .../disks/{disk_id}` lit un volume libvirt a partir de sa cle (`disk_id`) et renvoie un `Disk` (200), 404 si le volume est absent, ou 502 en cas d'erreur libvirt.
 
+`PATCH .../disks/{disk_id}` accepte `{"size_gb":40}` et redimensionne le volume (200 avec le `Disk` mis a jour). La reduction de capacite est refusee (400) pour eviter une perte de donnees ; le nom et le format ne sont pas modifiables par cette route. Un pilote qui ne prend pas en charge cette operation renvoie `501`, notamment le pilote de test `test:///default`.
+
 Corps prevu :
 
 ```json

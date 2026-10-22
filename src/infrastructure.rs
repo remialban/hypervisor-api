@@ -2,7 +2,7 @@ use axum::{extract::{Path,State}, http::StatusCode, Json};
 use std::path::Path as FilePath;
 use xmltree::{Element, XMLNode};
 
-use crate::{common::{error_response, not_implemented}, models::{Disk, DiskRequest, Message, NetworkRequest, StoragePool, StoragePoolRequest},
+use crate::{common::{error_response, not_implemented}, models::{Disk, DiskRequest, DiskUpdateRequest, Message, NetworkRequest, StoragePool, StoragePoolRequest},
 state::SharedState};
 
 type ApiResponse = (StatusCode, Json<Message>);
@@ -221,15 +221,55 @@ fn get_disk_from_libvirt(
     uri: &str,
     hypervisor_id: &str,
     disk_id: &str,
-) -> Result<Disk, virt::error::Error> {
+) -> Result<Option<Disk>, virt::error::Error> {
     let connection = virt::connect::Connect::open(Some(uri))?;
-    let volume = virt::storage_vol::StorageVol::lookup_by_key(&connection, disk_id)?;
-    let info = volume.get_info()?;
+    for pool in connection.list_all_storage_pools(0)? {
+        for volume in pool.list_all_volumes(0)? {
+            let key = volume.get_key()?;
+            if key == disk_id {
+                let info = volume.get_info()?;
+                return Ok(Some(Disk {
+                    id: key,
+                    hypervisor_id: hypervisor_id.to_owned(),
+                    name: volume.get_name()?,
+                    size_gb: (info.capacity / 1_073_741_824) as i64,
+                    format: "unknown".to_owned(),
+                }));
+            }
+        }
+    }
+
+    Ok(None)
+}
+
+enum DiskResizeError {
+    ShrinkNotAllowed,
+    Libvirt(virt::error::Error),
+}
+
+fn update_disk_from_libvirt(
+    uri: &str,
+    hypervisor_id: &str,
+    disk_id: &str,
+    size_bytes: u64,
+) -> Result<Disk, DiskResizeError> {
+    let connection = virt::connect::Connect::open(Some(uri)).map_err(DiskResizeError::Libvirt)?;
+    let volume = virt::storage_vol::StorageVol::lookup_by_key(&connection, disk_id)
+        .map_err(DiskResizeError::Libvirt)?;
+    let current_info = volume.get_info().map_err(DiskResizeError::Libvirt)?;
+    if size_bytes < current_info.capacity {
+        return Err(DiskResizeError::ShrinkNotAllowed);
+    }
+
+    volume
+        .resize(size_bytes, 0)
+        .map_err(DiskResizeError::Libvirt)?;
+    let info = volume.get_info().map_err(DiskResizeError::Libvirt)?;
 
     Ok(Disk {
-        id: volume.get_key()?,
+        id: volume.get_key().map_err(DiskResizeError::Libvirt)?,
         hypervisor_id: hypervisor_id.to_owned(),
-        name: volume.get_name()?,
+        name: volume.get_name().map_err(DiskResizeError::Libvirt)?,
         size_gb: (info.capacity / 1_073_741_824) as i64,
         format: "unknown".to_owned(),
     })
@@ -247,21 +287,61 @@ pub async fn get_disk(
     .await
     .map_err(|_| error_response(StatusCode::INTERNAL_SERVER_ERROR, "Tâche bloquée en échec"))?
     .map_err(|error| {
-        if error.code() == virt::error::ErrorNumber::NoStorageVolume {
-            error_response(StatusCode::NOT_FOUND, "Disque non trouvé")
-        } else {
-            eprintln!("get_disk libvirt error: {error}");
-            error_response(StatusCode::BAD_GATEWAY, "Erreur libvirt")
-        }
+        eprintln!("get_disk libvirt error: {error}");
+        error_response(StatusCode::BAD_GATEWAY, "Erreur libvirt")
     })?;
+    let disk = disk.ok_or_else(|| error_response(StatusCode::NOT_FOUND, "Disque non trouvé"))?;
 
     Ok(Json(disk))
 }
 
-#[utoipa::path(patch, path = "/api/hypervisors/{hypervisor_id}/disks/{disk_id}", params(("hypervisor_id" = String, Path), ("disk_id" = String, Path)), request_body = DiskRequest, responses((status = 501, body = Message)), tag = "Infrastructure")]
-pub async fn update_disk(Path((_hypervisor_id, _disk_id)): Path<(String, String)>, Json(body): Json<DiskRequest>) -> ApiResponse {
-    let _ = (body.name, body.size_gb, body.format);
-    not_implemented("Disk updates will be connected to libvirt")
+#[utoipa::path(patch, path = "/api/hypervisors/{hypervisor_id}/disks/{disk_id}", params(("hypervisor_id" = String, Path), ("disk_id" = String, Path)), request_body = DiskUpdateRequest, responses((status = 200, body = Disk), (status = 400, body = Message), (status = 404, body = Message), (status = 500, body = Message), (status = 501, body = Message), (status = 502, body = Message)), tag = "Infrastructure")]
+pub async fn update_disk(
+    State(state): State<SharedState>,
+    Path((hypervisor_id, disk_id)): Path<(String, String)>,
+    Json(body): Json<DiskUpdateRequest>,
+) -> Result<Json<Disk>, ApiError> {
+    if body.size_gb == 0 {
+        return Err(error_response(StatusCode::BAD_REQUEST, "Taille de disque invalide"));
+    }
+    let size_bytes = body
+        .size_gb
+        .checked_mul(1_073_741_824)
+        .ok_or_else(|| error_response(StatusCode::BAD_REQUEST, "Taille de disque invalide"))?;
+    let uri = get_hypervisor_uri(&state, &hypervisor_id).await?;
+
+    let disk = tokio::task::spawn_blocking(move || {
+        update_disk_from_libvirt(&uri, &hypervisor_id, &disk_id, size_bytes)
+    })
+    .await
+    .map_err(|_| error_response(StatusCode::INTERNAL_SERVER_ERROR, "Tâche bloquée en échec"))?
+    .map_err(|error| match error {
+        DiskResizeError::ShrinkNotAllowed => {
+            error_response(StatusCode::BAD_REQUEST, "La réduction de taille est interdite")
+        }
+        DiskResizeError::Libvirt(error) => {
+            match error.code() {
+                virt::error::ErrorNumber::NoStorageVolume => {
+                    error_response(StatusCode::NOT_FOUND, "Disque non trouvé")
+                }
+                virt::error::ErrorNumber::NoSupport
+                | virt::error::ErrorNumber::ArgumentUnsupported
+                | virt::error::ErrorNumber::OperationUnsupported => {
+                    eprintln!("update_disk resize unsupported: {error}");
+                    error_response(
+                        StatusCode::NOT_IMPLEMENTED,
+                        "Le pilote libvirt ne prend pas en charge le redimensionnement des volumes",
+                    )
+                }
+                _ => {
+                    eprintln!("update_disk libvirt error: {error}");
+                    error_response(StatusCode::BAD_GATEWAY, "Erreur libvirt")
+                }
+            }
+        }
+    })?;
+
+    Ok(Json(disk))
 }
 
 #[utoipa::path(delete, path = "/api/hypervisors/{hypervisor_id}/disks/{disk_id}", params(("hypervisor_id" = String, Path), ("disk_id" = String, Path)), responses((status = 501, body = Message)), tag = "Infrastructure")]

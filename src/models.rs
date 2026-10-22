@@ -53,6 +53,11 @@ pub struct DiskRequest {
     pub format: String,
 }
 
+#[derive(Deserialize, ToSchema)]
+pub struct DiskUpdateRequest {
+    pub size_gb: u64,
+}
+
 #[derive(Clone, Serialize, ToSchema, FromRow)]
 pub struct Disk {
     pub id: String,
