@@ -45,6 +45,8 @@ pub struct CreateVm {
     pub firmware: Option<String>,
     /// Start the VM right after its creation (default: false).
     pub start: Option<bool>,
+    /// Admin only: id of the user who will own the VM (default: the caller).
+    pub owner_id: Option<String>,
 }
 
 /// A disk of the new VM: either a new volume (`size_gb`) or an existing one (`volume`).
@@ -78,6 +80,10 @@ pub struct VirtualMachine {
     pub memory_mb: i64,
     pub vcpus: i64,
     pub status: String,
+    /// Username of the owner. Null for a VM created outside this API.
+    pub owner: Option<String>,
+    /// Why the caller sees this VM: `admin`, `owner` or `shared` (lent to them).
+    pub access: Option<String>,
 }
 
 #[derive(Deserialize, ToSchema)]
@@ -140,4 +146,6 @@ pub struct VncResponse {
     pub token: String,
     pub novnc_url: String,
     pub status: String,
+    /// Unix time (seconds) after which the token no longer opens a console.
+    pub expires_at: i64,
 }

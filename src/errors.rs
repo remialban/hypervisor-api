@@ -1,6 +1,6 @@
 use axum::{
     Json,
-    http::StatusCode,
+    http::{HeaderValue, StatusCode, header::WWW_AUTHENTICATE},
     response::{IntoResponse, Response},
 };
 use virt::error::ErrorNumber;
@@ -10,6 +10,11 @@ use crate::models::Message;
 // Every way a request can fail. Handlers return `Result<T, ApiError>`.
 #[derive(Debug)]
 pub enum ApiError {
+    /// Missing, invalid or expired credentials.
+    Unauthorized(String),
+    /// Authenticated, but not allowed to do this.
+    Forbidden(String),
+    TooManyRequests(String),
     NotFound(String),
     Conflict(String),
     BadRequest(String),
@@ -21,7 +26,10 @@ pub enum ApiError {
 impl ApiError {
     pub fn message(&self) -> &str {
         match self {
-            ApiError::NotFound(m)
+            ApiError::Unauthorized(m)
+            | ApiError::Forbidden(m)
+            | ApiError::TooManyRequests(m)
+            | ApiError::NotFound(m)
             | ApiError::Conflict(m)
             | ApiError::BadRequest(m)
             | ApiError::BadGateway(m)
@@ -29,24 +37,56 @@ impl ApiError {
             | ApiError::Internal(m) => m,
         }
     }
-}
 
-// Axum calls this to turn an error into an HTTP response (like @ExceptionHandler).
-impl IntoResponse for ApiError {
-    fn into_response(self) -> Response {
-        let (status, content) = match self {
+    fn into_parts(self) -> (StatusCode, String) {
+        match self {
+            ApiError::Unauthorized(m) => (StatusCode::UNAUTHORIZED, m),
+            ApiError::Forbidden(m) => (StatusCode::FORBIDDEN, m),
+            ApiError::TooManyRequests(m) => (StatusCode::TOO_MANY_REQUESTS, m),
             ApiError::NotFound(m) => (StatusCode::NOT_FOUND, m),
             ApiError::Conflict(m) => (StatusCode::CONFLICT, m),
             ApiError::BadRequest(m) => (StatusCode::BAD_REQUEST, m),
             ApiError::BadGateway(m) => (StatusCode::BAD_GATEWAY, m),
             ApiError::GatewayTimeout(m) => (StatusCode::GATEWAY_TIMEOUT, m),
             ApiError::Internal(m) => (StatusCode::INTERNAL_SERVER_ERROR, m),
-        };
-        let body = Message {
-            status: "error".into(),
-            content,
-        };
-        (status, Json(body)).into_response()
+        }
+    }
+}
+
+// Axum calls this to turn an error into an HTTP response (like @ExceptionHandler).
+impl IntoResponse for ApiError {
+    fn into_response(self) -> Response {
+        let unauthorized = matches!(self, ApiError::Unauthorized(_));
+        let (status, body) = <(StatusCode, Json<Message>)>::from(self);
+        let mut response = (status, body).into_response();
+        if unauthorized {
+            response
+                .headers_mut()
+                .insert(WWW_AUTHENTICATE, HeaderValue::from_static("Bearer"));
+        }
+        response
+    }
+}
+
+// Older handlers return `(StatusCode, Json<Message>)`: `?` converts an ApiError for them.
+impl From<ApiError> for (StatusCode, Json<Message>) {
+    fn from(err: ApiError) -> Self {
+        let (status, content) = err.into_parts();
+        (
+            status,
+            Json(Message {
+                status: "error".into(),
+                content,
+            }),
+        )
+    }
+}
+
+// Lets `?` convert a SQLite error into an ApiError automatically.
+impl From<sqlx::Error> for ApiError {
+    fn from(err: sqlx::Error) -> Self {
+        eprintln!("SQLite error: {err}");
+        ApiError::Internal("Database error".into())
     }
 }
 
@@ -90,6 +130,12 @@ mod tests {
     #[test]
     fn each_variant_maps_to_its_http_status() {
         let cases = [
+            (ApiError::Unauthorized("m".into()), StatusCode::UNAUTHORIZED),
+            (ApiError::Forbidden("m".into()), StatusCode::FORBIDDEN),
+            (
+                ApiError::TooManyRequests("m".into()),
+                StatusCode::TOO_MANY_REQUESTS,
+            ),
             (ApiError::NotFound("m".into()), StatusCode::NOT_FOUND),
             (ApiError::Conflict("m".into()), StatusCode::CONFLICT),
             (ApiError::BadRequest("m".into()), StatusCode::BAD_REQUEST),

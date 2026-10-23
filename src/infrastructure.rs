@@ -2,7 +2,7 @@ use axum::{extract::{Path,State}, http::StatusCode, Json};
 use std::path::Path as FilePath;
 use xmltree::{Element, XMLNode};
 
-use crate::{common::error_response, models::{Disk, DiskRequest, DiskUpdateRequest, Message, Network, NetworkRequest, StoragePool, StoragePoolRequest},
+use crate::{auth::AuthUser, common::error_response, models::{Disk, DiskRequest, DiskUpdateRequest, Message, Network, NetworkRequest, StoragePool, StoragePoolRequest},
 state::SharedState};
 
 type ApiError = (StatusCode, Json<Message>);
@@ -42,8 +42,10 @@ fn list_pools_from_libvirt(
 #[utoipa::path(get, path = "/api/hypervisors/{hypervisor_id}/pools", params(("hypervisor_id" = String, Path)), responses((status = 200, body = [StoragePool]), (status = 404, body = Message), (status = 502, body = Message)), tag = "Infrastructure")]
 pub async fn list_pools(
     State(state): State<SharedState>,
+    user: AuthUser,
     Path(hypervisor_id): Path<String>,
 ) -> Result<Json<Vec<StoragePool>>, ApiError> {
+    user.require_admin()?;
     let uri = get_hypervisor_uri(&state, &hypervisor_id).await?;
     let pools = tokio::task::spawn_blocking(move || {
         list_pools_from_libvirt(&uri, &hypervisor_id)
@@ -61,9 +63,11 @@ pub async fn list_pools(
 #[utoipa::path(post, path = "/api/hypervisors/{hypervisor_id}/pools", params(("hypervisor_id" = String, Path)), request_body = StoragePoolRequest, responses((status = 201, body = StoragePool), (status = 400, body = Message), (status = 404, body = Message), (status = 502, body = Message)), tag = "Infrastructure")]
 pub async fn create_pools(
     State(state): State<SharedState>,
+    user: AuthUser,
     Path(hypervisor_id): Path<String>,
     Json(body): Json<StoragePoolRequest>,
 ) -> Result<(StatusCode, Json<StoragePool>), ApiError> {
+    user.require_admin()?;
     let valid_name = !body.name.is_empty()
         && body.name.len() <= 64
         && !body.name.starts_with('.')
@@ -149,8 +153,10 @@ fn list_disks_from_libvirt(
 #[utoipa::path(get, path = "/api/hypervisors/{hypervisor_id}/disks", params(("hypervisor_id" = String, Path)), responses((status = 200, body = [Disk]), (status = 404, body = Message), (status = 500, body = Message), (status = 502, body = Message)), tag = "Infrastructure")]
 pub async fn list_disks(
     State(state): State<SharedState>,
+    user: AuthUser,
     Path(hypervisor_id): Path<String>,
 ) -> Result<Json<Vec<Disk>>, ApiError> {
+    user.require_admin()?;
     let uri = get_hypervisor_uri(&state, &hypervisor_id).await?;
     let disks = tokio::task::spawn_blocking(move || {
         list_disks_from_libvirt(&uri, &hypervisor_id)
@@ -165,9 +171,11 @@ pub async fn list_disks(
 #[utoipa::path(post, path = "/api/hypervisors/{hypervisor_id}/disks", params(("hypervisor_id" = String, Path)), request_body = DiskRequest, responses((status = 201, body = Disk), (status = 400, body = Message), (status = 404, body = Message), (status = 500, body = Message), (status = 502, body = Message)), tag = "Infrastructure")]
 pub async fn create_disk(
     State(state): State<SharedState>,
+    user: AuthUser,
     Path(hypervisor_id): Path<String>,
     Json(body): Json<DiskRequest>,
 ) -> Result<(StatusCode, Json<Disk>), ApiError> {
+    user.require_admin()?;
     if body.name.is_empty()
         || !body.name.chars().all(|character| {
             character.is_ascii_alphanumeric() || "-_.".contains(character)
@@ -277,8 +285,10 @@ fn update_disk_from_libvirt(
 #[utoipa::path(get, path = "/api/hypervisors/{hypervisor_id}/disks/{disk_id}", params(("hypervisor_id" = String, Path), ("disk_id" = String, Path)), responses((status = 200, body = Disk), (status = 404, body = Message), (status = 500, body = Message), (status = 502, body = Message)), tag = "Infrastructure")]
 pub async fn get_disk(
     State(state): State<SharedState>,
+    user: AuthUser,
     Path((hypervisor_id, disk_id)): Path<(String, String)>,
 ) -> Result<Json<Disk>, ApiError> {
+    user.require_admin()?;
     let uri = get_hypervisor_uri(&state, &hypervisor_id).await?;
     let disk = tokio::task::spawn_blocking(move || {
         get_disk_from_libvirt(&uri, &hypervisor_id, &disk_id)
@@ -297,9 +307,11 @@ pub async fn get_disk(
 #[utoipa::path(patch, path = "/api/hypervisors/{hypervisor_id}/disks/{disk_id}", params(("hypervisor_id" = String, Path), ("disk_id" = String, Path)), request_body = DiskUpdateRequest, responses((status = 200, body = Disk), (status = 400, body = Message), (status = 404, body = Message), (status = 500, body = Message), (status = 501, body = Message), (status = 502, body = Message)), tag = "Infrastructure")]
 pub async fn update_disk(
     State(state): State<SharedState>,
+    user: AuthUser,
     Path((hypervisor_id, disk_id)): Path<(String, String)>,
     Json(body): Json<DiskUpdateRequest>,
 ) -> Result<Json<Disk>, ApiError> {
+    user.require_admin()?;
     if body.size_gb == 0 {
         return Err(error_response(StatusCode::BAD_REQUEST, "Taille de disque invalide"));
     }
@@ -360,8 +372,10 @@ fn delete_disk_from_libvirt(uri: &str, disk_id: &str) -> Result<bool, virt::erro
 #[utoipa::path(delete, path = "/api/hypervisors/{hypervisor_id}/disks/{disk_id}", params(("hypervisor_id" = String, Path), ("disk_id" = String, Path)), responses((status = 204), (status = 404, body = Message), (status = 500, body = Message), (status = 501, body = Message), (status = 502, body = Message)), tag = "Infrastructure")]
 pub async fn delete_disk(
     State(state): State<SharedState>,
+    user: AuthUser,
     Path((hypervisor_id, disk_id)): Path<(String, String)>,
 ) -> Result<StatusCode, ApiError> {
+    user.require_admin()?;
     let uri = get_hypervisor_uri(&state, &hypervisor_id).await?;
     let deleted = tokio::task::spawn_blocking(move || delete_disk_from_libvirt(&uri, &disk_id))
         .await
@@ -416,8 +430,10 @@ fn list_networks_from_libvirt(
 #[utoipa::path(get, path = "/api/hypervisors/{hypervisor_id}/networks", params(("hypervisor_id" = String, Path)), responses((status = 200, body = [Network]), (status = 404, body = Message), (status = 500, body = Message), (status = 502, body = Message)), tag = "Infrastructure")]
 pub async fn list_networks(
     State(state): State<SharedState>,
+    user: AuthUser,
     Path(hypervisor_id): Path<String>,
 ) -> Result<Json<Vec<Network>>, ApiError> {
+    user.require_admin()?;
     let uri = get_hypervisor_uri(&state, &hypervisor_id).await?;
     let networks = tokio::task::spawn_blocking(move || {
         list_networks_from_libvirt(&uri, &hypervisor_id)
@@ -435,9 +451,11 @@ pub async fn list_networks(
 #[utoipa::path(post, path = "/api/hypervisors/{hypervisor_id}/networks", params(("hypervisor_id" = String, Path)), request_body = NetworkRequest, responses((status = 201, body = Network), (status = 400, body = Message), (status = 404, body = Message), (status = 409, body = Message), (status = 500, body = Message), (status = 501, body = Message), (status = 502, body = Message)), tag = "Infrastructure")]
 pub async fn create_network(
     State(state): State<SharedState>,
+    user: AuthUser,
     Path(hypervisor_id): Path<String>,
     Json(body): Json<NetworkRequest>,
 ) -> Result<(StatusCode, Json<Network>), ApiError> {
+    user.require_admin()?;
     let valid_name = !body.name.is_empty()
         && body.name.len() <= 64
         && !body.name.starts_with('.')

@@ -10,7 +10,9 @@ use axum::{
 use serde::Serialize;
 use utoipa::ToSchema;
 
-use crate::{errors::ApiError, libvirt, models::Message, state::SharedState};
+use crate::{
+    access, auth::AuthUser, errors::ApiError, libvirt, models::Message, state::SharedState,
+};
 
 pub const MIN_MEMORY_MB: u64 = 64;
 pub const MAX_MEMORY_MB: u64 = 1_048_576;
@@ -154,8 +156,11 @@ impl Default for Defaults {
 #[utoipa::path(get, path = "/api/hypervisors/{hypervisor_id}/vm-options", params(("hypervisor_id" = String, Path)), responses((status = 200, body = VmOptions), (status = 404, body = Message), (status = 502, body = Message)), tag = "VMs")]
 pub async fn get(
     State(state): State<SharedState>,
+    user: AuthUser,
     Path(hypervisor_id): Path<String>,
 ) -> Result<Json<VmOptions>, ApiError> {
+    // What can be chosen to create a VM is shown to those who may create one.
+    access::require_grant(&state, &user, &hypervisor_id).await?;
     let uri = libvirt::hypervisor_uri(&state.db, &hypervisor_id).await?;
     Ok(Json(libvirt::vm_options(uri).await?))
 }

@@ -614,6 +614,8 @@ fn to_vm(domain: &Domain, hypervisor_id: &str) -> Result<VirtualMachine, ApiErro
         memory_mb: (info.max_mem / 1024) as i64,
         vcpus: info.nr_virt_cpu as i64,
         status: state_label(info.state).to_string(),
+        owner: None,
+        access: None,
     })
 }
 

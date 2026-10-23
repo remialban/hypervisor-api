@@ -9,6 +9,8 @@ use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::{
+    access::Usage,
+    auth::AuthUser,
     errors::ApiError,
     models::{Message, VirtualMachine},
     state::SharedState,
@@ -35,6 +37,12 @@ pub struct Job {
     pub result: Option<VirtualMachine>,
     /// Set when the job failed.
     pub error: Option<String>,
+    /// Who asked for the job: only them (and admins) can follow it.
+    #[serde(skip)]
+    pub owner_id: String,
+    /// What the job will add to its owner's usage: counted against the quota while running.
+    #[serde(skip)]
+    pub reserved: Usage,
 }
 
 /// In-memory job tracking: jobs are lost when the API restarts.
@@ -44,13 +52,15 @@ pub struct JobRegistry {
 }
 
 impl JobRegistry {
-    pub fn start(&self, kind: &str) -> Job {
+    pub fn start(&self, kind: &str, owner_id: &str, reserved: Usage) -> Job {
         let job = Job {
             id: Uuid::new_v4().to_string(),
             kind: kind.to_string(),
             status: JobStatus::Running,
             result: None,
             error: None,
+            owner_id: owner_id.to_owned(),
+            reserved,
         };
         let mut jobs = self.lock();
         if jobs.len() >= MAX_JOBS {
@@ -79,6 +89,14 @@ impl JobRegistry {
         self.lock().get(id).cloned()
     }
 
+    /// What the running jobs of a user are about to add to what they own.
+    pub fn pending_usage(&self, owner_id: &str) -> Usage {
+        self.lock()
+            .values()
+            .filter(|j| j.status == JobStatus::Running && j.owner_id == owner_id)
+            .fold(Usage::default(), |total, j| total + j.reserved)
+    }
+
     // The lock is never held across an await and never left half-updated,
     // so a poisoned mutex is still safe to use.
     fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<String, Job>> {
@@ -86,14 +104,16 @@ impl JobRegistry {
     }
 }
 
-#[utoipa::path(get, path = "/api/jobs/{job_id}", params(("job_id" = String, Path, description = "Job identifier")), responses((status = 200, body = Job), (status = 404, body = Message)), tag = "Jobs")]
+#[utoipa::path(get, path = "/api/jobs/{job_id}", params(("job_id" = String, Path, description = "Job identifier")), responses((status = 200, body = Job), (status = 401, body = Message), (status = 404, body = Message)), tag = "Jobs")]
 pub async fn get(
     State(state): State<SharedState>,
+    user: AuthUser,
     Path(job_id): Path<String>,
 ) -> Result<Json<Job>, ApiError> {
     state
         .jobs
         .get(&job_id)
+        .filter(|job| user.is_admin() || job.owner_id == user.id)
         .map(Json)
         .ok_or_else(|| ApiError::NotFound("Job not found".into()))
 }
@@ -110,13 +130,15 @@ mod tests {
             memory_mb: 1,
             vcpus: 1,
             status: "stopped".into(),
+            owner: None,
+            access: None,
         }
     }
 
     #[test]
     fn a_new_job_is_running() {
         let registry = JobRegistry::default();
-        let job = registry.start("clone");
+        let job = registry.start("clone", "u", Usage::default());
         let stored = registry.get(&job.id).unwrap();
         assert_eq!(stored.status, JobStatus::Running);
         assert!(stored.result.is_none() && stored.error.is_none());
@@ -125,7 +147,7 @@ mod tests {
     #[test]
     fn success_keeps_the_result() {
         let registry = JobRegistry::default();
-        let job = registry.start("clone");
+        let job = registry.start("clone", "u", Usage::default());
         registry.finish(&job.id, Ok(vm()));
         let stored = registry.get(&job.id).unwrap();
         assert_eq!(stored.status, JobStatus::Succeeded);
@@ -135,7 +157,7 @@ mod tests {
     #[test]
     fn failure_keeps_the_message() {
         let registry = JobRegistry::default();
-        let job = registry.start("clone");
+        let job = registry.start("clone", "u", Usage::default());
         registry.finish(&job.id, Err(ApiError::Conflict("nope".into())));
         let stored = registry.get(&job.id).unwrap();
         assert_eq!(stored.status, JobStatus::Failed);
@@ -152,11 +174,11 @@ mod tests {
     #[test]
     fn full_registry_forgets_finished_jobs_but_not_running_ones() {
         let registry = JobRegistry::default();
-        let running = registry.start("clone");
-        let done = registry.start("clone");
+        let running = registry.start("clone", "u", Usage::default());
+        let done = registry.start("clone", "u", Usage::default());
         registry.finish(&done.id, Ok(vm()));
         for _ in 0..MAX_JOBS {
-            registry.start("clone");
+            registry.start("clone", "u", Usage::default());
         }
         assert!(registry.get(&running.id).is_some());
         assert!(registry.get(&done.id).is_none());
