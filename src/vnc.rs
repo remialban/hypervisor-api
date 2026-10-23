@@ -161,11 +161,15 @@ async fn write_replacing(path: &FilePath, content: &str) -> Result<(), std::io::
     Ok(())
 }
 
+/// How often expired tokens leave the token file: a token lives at most this much longer
+/// than its lifetime.
+const CLEANUP_INTERVAL: Duration = Duration::from_secs(10);
+
 /// Forgets expired tokens now and then, so they leave the token file too.
 pub fn spawn_cleanup(state: SharedState) {
     tokio::spawn(async move {
         loop {
-            tokio::time::sleep(Duration::from_secs(30)).await;
+            tokio::time::sleep(CLEANUP_INTERVAL).await;
             let removed = sqlx::query("DELETE FROM vnc_tokens WHERE expires_at <= ?")
                 .bind(now())
                 .execute(&state.db)

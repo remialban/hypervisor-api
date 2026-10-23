@@ -34,7 +34,9 @@ pub async fn list(
         return Err(ApiError::NotFound("Hypervisor not found".into()));
     }
     let uri = libvirt::hypervisor_uri(&state.db, &hypervisor_id).await?;
+    let listed_at = crate::auth::now();
     let vms = libvirt::list_vms(uri, hypervisor_id.clone()).await?;
+    access::prune_missing(&state, &hypervisor_id, &vms, listed_at).await;
     Ok(Json(
         access::visible_vms(&state, &user, &hypervisor_id, vms).await?,
     ))

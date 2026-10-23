@@ -181,7 +181,7 @@ pub(crate) fn unique(prefix: &str) -> String {
     format!("{prefix}-{}", &Uuid::new_v4().simple().to_string()[..8])
 }
 
-fn connect() -> Connect {
+pub(crate) fn connect() -> Connect {
     Connect::open(Some("test:///default")).unwrap()
 }
 

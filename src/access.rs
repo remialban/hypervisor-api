@@ -219,6 +219,40 @@ pub async fn forget_vm(state: &SharedState, hypervisor_id: &str, vm_id: &str) {
     }
 }
 
+/// Forgets the owners of VMs that no longer exist in libvirt (deleted behind our back, for
+/// example with `virsh undefine`), so they stop counting in quotas. `listed_at` is the time
+/// just before the VM list was read: an owner saved after that belongs to a VM created
+/// while we were listing, which the list cannot contain yet.
+pub async fn prune_missing(
+    state: &SharedState,
+    hypervisor_id: &str,
+    existing: &[VirtualMachine],
+    listed_at: i64,
+) {
+    let known: Result<Vec<String>, _> = sqlx::query_scalar(
+        "SELECT vm_id FROM vm_owners WHERE hypervisor_id = ? AND created_at < ?",
+    )
+    .bind(hypervisor_id)
+    .bind(listed_at)
+    .fetch_all(&state.db)
+    .await;
+    let Ok(known) = known else { return };
+    for vm_id in known {
+        if existing.iter().any(|vm| vm.id == vm_id) {
+            continue;
+        }
+        if let Err(error) =
+            sqlx::query("DELETE FROM vm_owners WHERE hypervisor_id = ? AND vm_id = ?")
+                .bind(hypervisor_id)
+                .bind(&vm_id)
+                .execute(&state.db)
+                .await
+        {
+            eprintln!("Could not forget a missing VM: {error}");
+        }
+    }
+}
+
 // ---------- hypervisors ----------
 
 /// Creating VMs on a hypervisor needs a grant from an admin.

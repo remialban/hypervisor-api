@@ -13,9 +13,11 @@ use serde_json::{Value, json};
 use tower::ServiceExt;
 use uuid::Uuid;
 
+use virt::domain::Domain;
+
 use crate::{
     auth::now,
-    http_tests::{POOL, TestApp, define_vm, unique},
+    http_tests::{POOL, TestApp, connect, define_vm, unique},
     state::AppState,
     users,
 };
@@ -1565,4 +1567,53 @@ async fn the_audit_log_tells_who_did_what() {
         )
         .await;
     assert_eq!(by_user.as_array().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn a_vm_deleted_behind_our_back_stops_counting_in_the_quota() {
+    let app = TestApp::new().await;
+    let (alice_id, alice) = app.user("alice", "user").await;
+    app.grant(&alice_id).await;
+    let vm = app.owned_vm(&alice).await;
+    // Removed straight in libvirt, as `virsh undefine` would.
+    let domain = Domain::lookup_by_uuid_string(&connect(), &vm).unwrap();
+    domain.undefine().unwrap();
+    // Pretend the VM is not brand new: rows from the last second are never pruned.
+    sqlx::query("UPDATE vm_owners SET created_at = 1")
+        .execute(&app.state.db)
+        .await
+        .unwrap();
+    assert_eq!(
+        app.quota(&alice_id, json!({ "max_vms": 1 })).await.0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        app.create_as(&alice, &unique("blocked")).await.0,
+        StatusCode::FORBIDDEN,
+        "the ghost still counts until the VMs are listed"
+    );
+
+    let (_, list) = app.status_as(&alice, Method::GET, &app.vms()).await;
+
+    assert_eq!(list.as_array().unwrap().len(), 0);
+    assert_eq!(
+        app.create_as(&alice, &unique("free")).await.0,
+        StatusCode::CREATED
+    );
+}
+
+#[tokio::test]
+async fn a_vm_created_while_listing_keeps_its_owner() {
+    let app = TestApp::new().await;
+    let (alice_id, alice) = app.user("alice", "user").await;
+    app.grant(&alice_id).await;
+    let vm = app.owned_vm(&alice).await;
+
+    // The list was read before the owner row existed: the row must survive.
+    crate::access::prune_missing(&app.state, &app.hypervisor_id, &[], 1).await;
+
+    assert_eq!(
+        app.status_as(&alice, Method::GET, &app.vm(&vm)).await.0,
+        StatusCode::OK
+    );
 }
