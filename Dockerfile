@@ -27,6 +27,13 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 
+# Données persistantes : base SQLite et fichier de tokens lu par websockify.
+# Monter un volume sur /data pour les conserver entre deux démarrages.
+ENV DATABASE_URL=sqlite:///data/api.db?mode=rwc \
+    VM_CONFIG_PATH=/data/vm.cfg
+RUN mkdir -p /data
+VOLUME /data
+
 # Copie du binaire compilé depuis l'étape de build
 COPY --from=builder /usr/src/api/target/release/api /usr/local/bin/api
 

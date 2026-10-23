@@ -79,14 +79,17 @@ Les VM, disques et reseaux ne doivent pas etre stockes dans SQLite. Leur source 
 
 - [ ] Lire le display VNC de la VM depuis libvirt.
 - [ ] Retourner une URL ou un port VNC securise.
-- [ ] Ajouter une authentification et une autorisation par hyperviseur.
-- [ ] Ne jamais exposer directement un port VNC sans controle d'acces.
+- [x] Ajouter une authentification et une autorisation par hyperviseur (droit sur la VM : proprietaire, emprunteur ou admin).
+- [x] Ne jamais exposer directement un port VNC sans controle d'acces (jetons aleatoires de 2 minutes).
 - [ ] Ajouter un proxy WebSocket si l'interface web doit utiliser noVNC.
 
 ### Priorite 4 : securite et robustesse
 
-- [ ] Ajouter une authentification API.
-- [ ] Ajouter une autorisation par role et par hyperviseur.
+- [x] Ajouter une authentification API (JWT + refresh token, endpoint OAuth2 `/api/auth/token`), voir `docs/AUTH.md`.
+- [x] Ajouter une autorisation par role et par hyperviseur (admin / user, acces hyperviseur, proprietaire de VM, pret de VM).
+- [x] Quotas par utilisateur (optionnels) et journal d'audit.
+- [ ] Brancher le front Angular sur l'authentification (service, intercepteur, gardes, page de connexion).
+- [ ] Servir l'API en HTTPS (reverse proxy) pour un deploiement hors reseau local.
 - [ ] Valider les noms, URI, tailles et formats recus.
 - [ ] Ajouter des timeouts pour les connexions libvirt.
 - [ ] Ne pas retourner de secrets ou d'informations sensibles dans les erreurs.

@@ -4,15 +4,27 @@ services:
       context: .
       dockerfile: Dockerfile
     environment:
+      # Base SQLite (comptes, droits, propriétaires de VM, audit) et fichier de tokens noVNC :
+      # les deux vivent dans le volume ./data, partagé avec le conteneur noVNC.
       DATABASE_URL: sqlite:///data/api.db?mode=rwc
       VM_CONFIG_PATH: /data/vm.cfg
       SSH_PRIVATE_KEY_PATH: /run/secrets/ssh_private_key
       NOVNC_URL: ${NOVNC_URL:-http://localhost:6080/vnc.html}
+      # Authentification. Le secret signe les JWT : 32 caractères minimum, à garder secret.
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET doit être défini (32 caractères minimum, voir .env.example)}
+      ACCESS_TOKEN_TTL_SECONDS: ${ACCESS_TOKEN_TTL_SECONDS:-900}
+      REFRESH_TOKEN_TTL_SECONDS: ${REFRESH_TOKEN_TTL_SECONDS:-604800}
+      VNC_TOKEN_TTL_SECONDS: ${VNC_TOKEN_TTL_SECONDS:-120}
+      # Premier administrateur, créé seulement si la base ne contient encore aucun compte.
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?ADMIN_PASSWORD doit être défini (8 caractères minimum, voir .env.example)}
+      # Origines du front Angular autorisées à appeler l'API depuis un navigateur (CORS),
+      # séparées par des virgules. Vide = même origine uniquement (front derrière un proxy).
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-}
     ports:
       - "3000:3000"
     volumes:
       - ./data:/data
-      - ./vm.cfg:/data/vm.cfg
       - /var/run/libvirt/libvirt-sock:/var/run/libvirt/libvirt-sock
       - ${SSH_PRIVATE_KEY_HOST_PATH:?SSH_PRIVATE_KEY_HOST_PATH doit pointer vers la clé privée}:/run/secrets/ssh_private_key:ro
     restart: unless-stopped
@@ -25,9 +37,9 @@ services:
       VM_CONFIG_PATH: /data/vm.cfg
     ports:
       - "6080:6080"
+    # Le dossier (et non le fichier) est monté : l'API remplace vm.cfg de façon atomique.
     volumes:
       - ./data:/data
-      - ./vm.cfg:/data/vm.cfg
     depends_on:
       - api
     restart: unless-stopped

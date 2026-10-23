@@ -7,8 +7,10 @@ RUN apt-get update && apt-get install -y \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Création du dossier et du fichier pour stocker la correspondance token/VM
-RUN mkdir -p /etc/novnc && touch /etc/novnc/vm.cfg
+# Le fichier token -> hôte:port est écrit par l'API dans le volume partagé /data
+# (variable VM_CONFIG_PATH, lue par le script de démarrage).
+COPY docker/novnc-entrypoint.sh /usr/local/bin/novnc-entrypoint.sh
+RUN chmod +x /usr/local/bin/novnc-entrypoint.sh
 
 # Création d'un lien symbolique pour que la racine web pointe directement sur vnc.html
 RUN ln -sf /usr/share/novnc/vnc.html /usr/share/novnc/index.html
@@ -16,5 +18,5 @@ RUN ln -sf /usr/share/novnc/vnc.html /usr/share/novnc/index.html
 # Port par défaut de noVNC / websockify
 EXPOSE 6080
 
-# Commande pour démarrer websockify avec authentification par token
-CMD ["websockify", "--token-plugin", "TokenFile", "--token-source", "/etc/novnc/vm.cfg", "6080", "--web", "/usr/share/novnc"]
+# Démarre websockify avec authentification par token (tokens courts émis par l'API)
+ENTRYPOINT ["novnc-entrypoint.sh"]
