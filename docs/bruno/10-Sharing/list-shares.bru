@@ -1,0 +1,19 @@
+meta {
+  name: List shares
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{baseUrl}}{{apiPrefix}}/hypervisors/{{hypervisorId}}/vms/{{vmId}}/shares
+  body: none
+  auth: inherit
+}
+
+assert {
+  res.status: eq 200
+}
+
+docs {
+  Owner or admin. A borrower gets 403.
+}

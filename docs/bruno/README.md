@@ -7,9 +7,12 @@ No formal contract exists yet: this collection is the working draft that will he
 
 1. Install [Bruno](https://www.usebruno.com/) and run the API (`cargo run`, listens on `http://127.0.0.1:3000`).
 2. In Bruno: **Open Collection** → select this `docs/bruno` folder.
-3. Pick the environment `local` (top right), then run **01-Hypervisors → Create hypervisor** first.
-   It stores `hypervisorId` as a runtime variable used by every other request.
-4. Run **Delete hypervisor** last, since it removes the hypervisor the other folders rely on.
+3. Pick the environment `local` (top right) and fill the secret `adminPassword` (the `ADMIN_PASSWORD` the API
+   was started with; `adminUsername` defaults to `admin`). Run **00-Auth → Login (JSON)**: it stores
+   `accessToken`, which the collection sends as a Bearer token on every request.
+   Access tokens last 15 minutes: run **Refresh tokens** (or log in again) when you get a `401`.
+4. Run **01-Hypervisors → Create hypervisor**. It stores `hypervisorId` as a runtime variable used by every other request.
+5. Run **Delete hypervisor** last, since it removes the hypervisor the other folders rely on.
 
 ## Variables (`environments/*.bru`)
 
@@ -21,16 +24,20 @@ No formal contract exists yet: this collection is the working draft that will he
 | `hypervisorId` | Set automatically by *Create hypervisor* | empty |
 | `vmId`, `networkId` | Fill in by hand (or set via scripts) once those endpoints are implemented | empty |
 | `diskId` | Set automatically by **Create disk** from the returned libvirt key (URL-encoded for the path) | empty |
+| `adminUsername`, `adminPassword` | Credentials used by **Login** (the password is a secret variable, kept out of git) | `admin` / empty |
+| `accessToken`, `refreshToken` | Set by **Login** / **Refresh tokens** | empty |
+| `userId`, `username` | Set by **Create user** (`userId`); `username` is the account created or lent to | empty / `alice` |
 | `missingId` | An id that never exists, used by the *Error cases* folder | all-zero UUID |
 
 To target another API instance, duplicate an environment file and change `baseUrl`. `remote-kvm` is a template for a real host (`qemu+ssh://...`).
-No secrets are needed today. If auth is added, use `{{process.env.NAME}}` with a local `.env` (see `.env.example`; `.env` is git-ignored).
+Secrets (`adminPassword`, tokens) are declared as secret variables: Bruno keeps their values on your machine only.
 
 ## Endpoint status (from the code)
 
 | Folder | State |
 |---|---|
 | Health, Hypervisors | Implemented (SQLite + libvirt connection test) |
+| Auth, Users, Admin, Sharing | Implemented: login/refresh, accounts, quotas, registration flag, audit, hypervisor access, VM lending (see `docs/AUTH.md`) |
 | Storage pools in Disks | List and create pools through libvirt. |
 | VMs, Disks, Networks, VNC | Other operations still return `501 {"status":"not_implemented","content":...}` where not implemented. |
 | Error cases | 502 unreachable URI, 404 unknown id, 422 invalid body (framework message, plain text, not a `Message`) |

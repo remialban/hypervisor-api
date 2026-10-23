@@ -1,0 +1,23 @@
+meta {
+  name: Audit log
+  type: http
+  seq: 3
+}
+
+get {
+  url: {{baseUrl}}{{apiPrefix}}/audit
+  body: none
+  auth: inherit
+}
+
+params:query {
+  limit: 50
+}
+
+assert {
+  res.status: eq 200
+}
+
+docs {
+  Admin only. Newest first. Filters: user_id, action (e.g. vm.delete), limit (max 500), offset. Times are Unix seconds.
+}

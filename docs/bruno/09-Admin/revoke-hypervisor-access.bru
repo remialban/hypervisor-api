@@ -1,0 +1,19 @@
+meta {
+  name: Revoke hypervisor access
+  type: http
+  seq: 6
+}
+
+delete {
+  url: {{baseUrl}}{{apiPrefix}}/hypervisors/{{hypervisorId}}/access/{{userId}}
+  body: none
+  auth: inherit
+}
+
+assert {
+  res.status: eq 204
+}
+
+docs {
+  Admin only. The user keeps the VMs they already own.
+}

@@ -1,0 +1,25 @@
+meta {
+  name: Update user
+  type: http
+  seq: 6
+}
+
+patch {
+  url: {{baseUrl}}{{apiPrefix}}/users/{{userId}}
+  body: json
+  auth: inherit
+}
+
+body:json {
+  {
+    "disabled": false
+  }
+}
+
+assert {
+  res.status: eq 200
+}
+
+docs {
+  Admin only. role and/or disabled. Disabling cuts the sessions at once. 409 when it would leave no active admin.
+}

@@ -1,0 +1,19 @@
+meta {
+  name: Revoke share
+  type: http
+  seq: 3
+}
+
+delete {
+  url: {{baseUrl}}{{apiPrefix}}/hypervisors/{{hypervisorId}}/vms/{{vmId}}/shares/{{userId}}
+  body: none
+  auth: inherit
+}
+
+assert {
+  res.status: eq 204
+}
+
+docs {
+  Owner or admin, or the borrower himself (to give the VM back).
+}

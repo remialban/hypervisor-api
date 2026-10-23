@@ -1,0 +1,25 @@
+meta {
+  name: Change owner
+  type: http
+  seq: 4
+}
+
+put {
+  url: {{baseUrl}}{{apiPrefix}}/hypervisors/{{hypervisorId}}/vms/{{vmId}}/owner
+  body: json
+  auth: inherit
+}
+
+body:json {
+  {
+    "owner_id": "{{userId}}"
+  }
+}
+
+assert {
+  res.status: eq 200
+}
+
+docs {
+  Admin only. Also how a VM created outside the API gets an owner (until then only admins see it).
+}

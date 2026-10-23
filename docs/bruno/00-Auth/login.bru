@@ -1,0 +1,33 @@
+meta {
+  name: Login (JSON)
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{baseUrl}}{{apiPrefix}}/auth/login
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+    "username": "{{adminUsername}}",
+    "password": "{{adminPassword}}"
+  }
+}
+
+assert {
+  res.status: eq 200
+}
+
+script:post-response {
+  if (res.status === 200) {
+    bru.setVar("accessToken", res.body.access_token);
+    bru.setVar("refreshToken", res.body.refresh_token);
+  }
+}
+
+docs {
+  Run this first. Stores accessToken and refreshToken, which every other request sends as a Bearer token (set at collection level). 401 for a wrong username/password (same message in both cases), 429 after 5 failures.
+}
