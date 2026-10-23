@@ -109,7 +109,7 @@ avec le nom de la limite. Une VM créée par un admin pour un utilisateur compte
 
 `GET /api/hypervisors/{h}/vms/{vm}/vnc` vérifie le droit d'accès, puis crée un **jeton aléatoire de
 2 minutes** (`VNC_TOKEN_TTL_SECONDS`) qui associe `hôte:port` dans le fichier lu par websockify. Il
-n'est plus l'UUID de la VM : ouvrir `novnc_url` fonctionne, deviner un UUID non. Le jeton n'est
+n'est plus l'UUID de la VM : ouvrir `novnc_url` fonctionne, deviner un UUID non. Le jeton disparaît du fichier au plus 10 secondes après son expiration. Il n'est
 valable que pour établir la connexion ; la console ouverte continue ensuite. Rappeler la route pour
 en obtenir un nouveau (par exemple pour se reconnecter).
 
