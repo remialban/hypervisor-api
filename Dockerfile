@@ -27,6 +27,13 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 
+# /data : base SQLite (à conserver entre deux démarrages).
+# /vnc  : fichier de jetons lu par websockify, partagé avec le conteneur noVNC.
+ENV DATABASE_URL=sqlite:///data/api.db?mode=rwc \
+    VM_CONFIG_PATH=/vnc/vm.cfg
+RUN mkdir -p /data /vnc
+VOLUME ["/data", "/vnc"]
+
 # Copie du binaire compilé depuis l'étape de build
 COPY --from=builder /usr/src/api/target/release/api /usr/local/bin/api
 

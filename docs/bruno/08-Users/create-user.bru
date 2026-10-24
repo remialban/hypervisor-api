@@ -1,0 +1,31 @@
+meta {
+  name: Create user
+  type: http
+  seq: 4
+}
+
+post {
+  url: {{baseUrl}}{{apiPrefix}}/users
+  body: json
+  auth: inherit
+}
+
+body:json {
+  {
+    "username": "{{username}}",
+    "password": "a long password",
+    "role": "user"
+  }
+}
+
+assert {
+  res.status: eq 201
+}
+
+script:post-response {
+  if (res.status === 201) { bru.setVar("userId", res.body.id); }
+}
+
+docs {
+  Admin only. role is "user" (default) or "admin". 409 when the username is taken (case insensitive). Stores userId.
+}

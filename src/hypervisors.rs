@@ -1,31 +1,51 @@
 use axum::{extract::{Path, State}, http::StatusCode, Json};
 use uuid::Uuid;
 
-use crate::{common::error_response, models::{CreateHypervisor, Hypervisor, Message, UpdateHypervisor}, state::SharedState};
+use crate::{access, audit, auth::{AuthUser, now}, common::error_response, models::{CreateHypervisor, Hypervisor, Message, UpdateHypervisor}, state::SharedState};
 
 type ApiError = (StatusCode, Json<Message>);
 
 #[utoipa::path(get, path = "/api/hypervisors", responses((status = 200, body = [Hypervisor])), tag = "Hypervisors")]
-pub async fn list(State(state): State<SharedState>) -> Result<Json<Vec<Hypervisor>>, ApiError> {
-    let hypervisors = sqlx::query_as::<_, Hypervisor>("SELECT id, name, uri, status FROM hypervisors ORDER BY name")
+pub async fn list(State(state): State<SharedState>, user: AuthUser) -> Result<Json<Vec<Hypervisor>>, ApiError> {
+    // An admin sees everything; others only what they were granted or what hosts one of their VMs.
+    let hypervisors = if user.is_admin() {
+        sqlx::query_as::<_, Hypervisor>("SELECT id, name, uri, status FROM hypervisors ORDER BY name")
+            .fetch_all(&state.db).await
+    } else {
+        sqlx::query_as::<_, Hypervisor>(&format!(
+            "SELECT id, name, uri, status FROM hypervisors WHERE id IN ({}) ORDER BY name",
+            access::VISIBLE_HYPERVISORS
+        ))
+        .bind(&user.id).bind(now())
         .fetch_all(&state.db).await
-        .map_err(|_| error_response(StatusCode::INTERNAL_SERVER_ERROR, "SQLite read failed"))?;
+    }
+    .map_err(|_| error_response(StatusCode::INTERNAL_SERVER_ERROR, "SQLite read failed"))?;
     let mut results = Vec::with_capacity(hypervisors.len());
-    for hypervisor in hypervisors { results.push(refresh_status(&state, hypervisor).await?); }
+    for hypervisor in hypervisors { results.push(present(&user, refresh_status(&state, hypervisor).await?)); }
     Ok(Json(results))
 }
 
+/// The connection URI can reveal hosts and SSH users: only admins get it.
+fn present(user: &AuthUser, mut hypervisor: Hypervisor) -> Hypervisor {
+    if !user.is_admin() { hypervisor.uri = String::new(); }
+    hypervisor
+}
+
 #[utoipa::path(get, path = "/api/hypervisors/{id}", params(("id" = String, Path, description = "Hypervisor identifier")), responses((status = 200, body = Hypervisor), (status = 404, body = Message)), tag = "Hypervisors")]
-pub async fn get(State(state): State<SharedState>, Path(id): Path<String>) -> Result<Json<Hypervisor>, ApiError> {
+pub async fn get(State(state): State<SharedState>, user: AuthUser, Path(id): Path<String>) -> Result<Json<Hypervisor>, ApiError> {
+    if !access::hypervisor_visible(&state, &user, &id).await? {
+        return Err(error_response(StatusCode::NOT_FOUND, "Hypervisor not found"));
+    }
     let hypervisor = sqlx::query_as::<_, Hypervisor>("SELECT id, name, uri, status FROM hypervisors WHERE id = ?")
         .bind(&id).fetch_optional(&state.db).await
         .map_err(|_| error_response(StatusCode::INTERNAL_SERVER_ERROR, "SQLite read failed"))?
         .ok_or_else(|| error_response(StatusCode::NOT_FOUND, "Hypervisor not found"))?;
-    Ok(Json(refresh_status(&state, hypervisor).await?))
+    Ok(Json(present(&user, refresh_status(&state, hypervisor).await?)))
 }
 
 #[utoipa::path(post, path = "/api/hypervisors", request_body = CreateHypervisor, responses((status = 201, body = Hypervisor), (status = 502, body = Message)), tag = "Hypervisors")]
-pub async fn create(State(state): State<SharedState>, Json(body): Json<CreateHypervisor>) -> Result<(StatusCode, Json<Hypervisor>), ApiError> {
+pub async fn create(State(state): State<SharedState>, user: AuthUser, Json(body): Json<CreateHypervisor>) -> Result<(StatusCode, Json<Hypervisor>), ApiError> {
+    user.require_admin()?;
     if !test_connection(body.uri.clone()).await {
         return Err(error_response(StatusCode::BAD_GATEWAY, "Could not connect to libvirt with this URI"));
     }
@@ -34,30 +54,85 @@ pub async fn create(State(state): State<SharedState>, Json(body): Json<CreateHyp
         .bind(&hypervisor.id).bind(&hypervisor.name).bind(&hypervisor.uri).bind(&hypervisor.status)
         .execute(&state.db).await
         .map_err(|_| error_response(StatusCode::INTERNAL_SERVER_ERROR, "SQLite write failed"))?;
+    audit::record(&state, &user, "hypervisor.create", &hypervisor.id, &hypervisor.name).await;
     Ok((StatusCode::CREATED, Json(hypervisor)))
 }
 
 #[utoipa::path(patch, path = "/api/hypervisors/{id}", params(("id" = String, Path, description = "Hypervisor identifier")), request_body = UpdateHypervisor, responses((status = 200, body = Hypervisor), (status = 404, body = Message), (status = 502, body = Message)), tag = "Hypervisors")]
-pub async fn update(State(state): State<SharedState>, Path(id): Path<String>, Json(body): Json<UpdateHypervisor>) -> Result<Json<Hypervisor>, ApiError> {
+pub async fn update(State(state): State<SharedState>, user: AuthUser, Path(id): Path<String>, Json(body): Json<UpdateHypervisor>) -> Result<Json<Hypervisor>, ApiError> {
+    user.require_admin()?;
     let UpdateHypervisor { name, uri } = body;
-    if let Some(uri) = uri.as_ref() {
-        if !test_connection(uri.clone()).await {
-            return Err(error_response(StatusCode::BAD_GATEWAY, "Could not connect to libvirt with this URI"));
-        }
+    if let Some(uri) = uri.as_ref()
+        && !test_connection(uri.clone()).await
+    {
+        return Err(error_response(StatusCode::BAD_GATEWAY, "Could not connect to libvirt with this URI"));
     }
     let result = sqlx::query("UPDATE hypervisors SET name = COALESCE(?, name), uri = COALESCE(?, uri), status = CASE WHEN ? IS NULL THEN status ELSE 'connected' END WHERE id = ?")
         .bind(name).bind(uri.clone()).bind(uri).bind(&id).execute(&state.db).await
         .map_err(|_| error_response(StatusCode::INTERNAL_SERVER_ERROR, "SQLite write failed"))?;
     if result.rows_affected() == 0 { return Err(error_response(StatusCode::NOT_FOUND, "Hypervisor not found")); }
-    get(State(state), Path(id)).await
+    audit::record(&state, &user, "hypervisor.update", &id, "").await;
+    get(State(state), user, Path(id)).await
 }
 
 #[utoipa::path(delete, path = "/api/hypervisors/{id}", params(("id" = String, Path, description = "Hypervisor identifier")), responses((status = 204), (status = 404, body = Message)), tag = "Hypervisors")]
-pub async fn delete(State(state): State<SharedState>, Path(id): Path<String>) -> Result<StatusCode, ApiError> {
-    let result = sqlx::query("DELETE FROM hypervisors WHERE id = ?").bind(id).execute(&state.db).await
+pub async fn delete(State(state): State<SharedState>, user: AuthUser, Path(id): Path<String>) -> Result<StatusCode, ApiError> {
+    user.require_admin()?;
+    let result = sqlx::query("DELETE FROM hypervisors WHERE id = ?").bind(&id).execute(&state.db).await
         .map_err(|_| error_response(StatusCode::INTERNAL_SERVER_ERROR, "SQLite write failed"))?;
     if result.rows_affected() == 0 { return Err(error_response(StatusCode::NOT_FOUND, "Hypervisor not found")); }
+    audit::record(&state, &user, "hypervisor.delete", &id, "").await;
     Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(serde::Serialize, utoipa::ToSchema, sqlx::FromRow)]
+pub struct AccessEntry {
+    pub user_id: String,
+    pub username: String,
+    pub created_at: i64,
+}
+
+#[utoipa::path(get, path = "/api/hypervisors/{id}/access", params(("id" = String, Path, description = "Hypervisor identifier")), responses((status = 200, body = [AccessEntry]), (status = 403, body = Message), (status = 404, body = Message)), tag = "Hypervisors")]
+pub async fn list_access(State(state): State<SharedState>, user: AuthUser, Path(id): Path<String>) -> Result<Json<Vec<AccessEntry>>, ApiError> {
+    user.require_admin()?;
+    ensure_exists(&state, &id).await?;
+    let entries = sqlx::query_as::<_, AccessEntry>(
+        "SELECT a.user_id, u.username, a.created_at FROM hypervisor_access a JOIN users u ON u.id = a.user_id WHERE a.hypervisor_id = ? ORDER BY u.username")
+        .bind(&id).fetch_all(&state.db).await
+        .map_err(|_| error_response(StatusCode::INTERNAL_SERVER_ERROR, "SQLite read failed"))?;
+    Ok(Json(entries))
+}
+
+/// Lets a user create VMs on this hypervisor (admin only).
+#[utoipa::path(put, path = "/api/hypervisors/{id}/access/{user_id}", params(("id" = String, Path, description = "Hypervisor identifier"), ("user_id" = String, Path)), responses((status = 204), (status = 403, body = Message), (status = 404, body = Message)), tag = "Hypervisors")]
+pub async fn grant_access(State(state): State<SharedState>, user: AuthUser, Path((id, user_id)): Path<(String, String)>) -> Result<StatusCode, ApiError> {
+    user.require_admin()?;
+    ensure_exists(&state, &id).await?;
+    let exists: Option<i64> = sqlx::query_scalar("SELECT 1 FROM users WHERE id = ?").bind(&user_id).fetch_optional(&state.db).await
+        .map_err(|_| error_response(StatusCode::INTERNAL_SERVER_ERROR, "SQLite read failed"))?;
+    if exists.is_none() { return Err(error_response(StatusCode::NOT_FOUND, "User not found")); }
+    sqlx::query("INSERT OR IGNORE INTO hypervisor_access (user_id, hypervisor_id, created_at) VALUES (?, ?, ?)")
+        .bind(&user_id).bind(&id).bind(now()).execute(&state.db).await
+        .map_err(|_| error_response(StatusCode::INTERNAL_SERVER_ERROR, "SQLite write failed"))?;
+    audit::record(&state, &user, "hypervisor.grant", &id, &user_id).await;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[utoipa::path(delete, path = "/api/hypervisors/{id}/access/{user_id}", params(("id" = String, Path, description = "Hypervisor identifier"), ("user_id" = String, Path)), responses((status = 204), (status = 403, body = Message), (status = 404, body = Message)), tag = "Hypervisors")]
+pub async fn revoke_access(State(state): State<SharedState>, user: AuthUser, Path((id, user_id)): Path<(String, String)>) -> Result<StatusCode, ApiError> {
+    user.require_admin()?;
+    let result = sqlx::query("DELETE FROM hypervisor_access WHERE user_id = ? AND hypervisor_id = ?")
+        .bind(&user_id).bind(&id).execute(&state.db).await
+        .map_err(|_| error_response(StatusCode::INTERNAL_SERVER_ERROR, "SQLite write failed"))?;
+    if result.rows_affected() == 0 { return Err(error_response(StatusCode::NOT_FOUND, "Access not found")); }
+    audit::record(&state, &user, "hypervisor.revoke", &id, &user_id).await;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn ensure_exists(state: &SharedState, id: &str) -> Result<(), ApiError> {
+    let found: Option<i64> = sqlx::query_scalar("SELECT 1 FROM hypervisors WHERE id = ?").bind(id).fetch_optional(&state.db).await
+        .map_err(|_| error_response(StatusCode::INTERNAL_SERVER_ERROR, "SQLite read failed"))?;
+    found.map(|_| ()).ok_or_else(|| error_response(StatusCode::NOT_FOUND, "Hypervisor not found"))
 }
 
 async fn test_connection(uri: String) -> bool {

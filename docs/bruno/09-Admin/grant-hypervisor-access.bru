@@ -1,0 +1,19 @@
+meta {
+  name: Grant hypervisor access
+  type: http
+  seq: 5
+}
+
+put {
+  url: {{baseUrl}}{{apiPrefix}}/hypervisors/{{hypervisorId}}/access/{{userId}}
+  body: none
+  auth: inherit
+}
+
+assert {
+  res.status: eq 204
+}
+
+docs {
+  Admin only. Lets the user create VMs on this hypervisor (they can already use VMs lent to them anywhere).
+}

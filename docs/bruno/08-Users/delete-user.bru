@@ -1,0 +1,19 @@
+meta {
+  name: Delete user
+  type: http
+  seq: 9
+}
+
+delete {
+  url: {{baseUrl}}{{apiPrefix}}/users/{{userId}}
+  body: none
+  auth: inherit
+}
+
+assert {
+  res.status: eq 204
+}
+
+docs {
+  Admin only. 409 while the user still owns VMs (delete them or use PUT .../owner first) or if it is the last admin.
+}

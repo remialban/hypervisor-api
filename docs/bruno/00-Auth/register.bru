@@ -1,0 +1,26 @@
+meta {
+  name: Register
+  type: http
+  seq: 6
+}
+
+post {
+  url: {{baseUrl}}{{apiPrefix}}/auth/register
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+    "username": "{{username}}",
+    "password": "a long password"
+  }
+}
+
+assert {
+  res.status: eq 201
+}
+
+docs {
+  Creates a basic user account. 403 while registration is closed (default); an admin opens it with PUT /settings. Never creates an admin.
+}

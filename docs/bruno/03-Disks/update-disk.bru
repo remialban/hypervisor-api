@@ -7,14 +7,12 @@ meta {
 patch {
   url: {{baseUrl}}{{apiPrefix}}/hypervisors/{{hypervisorId}}/disks/{{diskId}}
   body: json
-  auth: none
+  auth: inherit
 }
 
 body:json {
   {
-    "name": "disk-01",
-    "size_gb": 40,
-    "format": "qcow2"
+    "size_gb": 40
   }
 }
 
@@ -23,5 +21,5 @@ assert {
 }
 
 docs {
-  Body reuses DiskRequest: all three fields are required (no partial PATCH in the code today). Not implemented yet: the API returns 501 {status:"not_implemented",content}. Update the assertion once libvirt is wired.
+  The local test driver does not support volume resizing and returns 501. With a supporting driver, resizing succeeds with 200. Shrinking is rejected to avoid data loss.
 }

@@ -7,21 +7,27 @@ meta {
 post {
   url: {{baseUrl}}{{apiPrefix}}/hypervisors/{{hypervisorId}}/disks
   body: json
-  auth: none
+  auth: inherit
 }
 
 body:json {
   {
-    "name": "disk-01",
+    "name": "disk-{{$guid}}",
     "size_gb": 20,
     "format": "qcow2"
   }
 }
 
 assert {
-  res.status: eq 501
+  res.status: eq 201
+}
+
+script:post-response {
+  if (res.status === 201) {
+    bru.setVar("diskId", encodeURIComponent(res.body.id));
+  }
 }
 
 docs {
-  Body: DiskRequest {name, size_gb (u64), format}. Planned: Disk. Not implemented yet: the API returns 501 {status:"not_implemented",content}. Update the assertion once libvirt is wired.
+  Creates a uniquely named volume and stores its URL-encoded libvirt key in diskId for Get disk.
 }

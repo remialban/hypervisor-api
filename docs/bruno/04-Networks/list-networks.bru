@@ -7,13 +7,13 @@ meta {
 get {
   url: {{baseUrl}}{{apiPrefix}}/hypervisors/{{hypervisorId}}/networks
   body: none
-  auth: none
+  auth: inherit
 }
 
 assert {
-  res.status: eq 501
+  res.status: eq 200
 }
 
 docs {
-  Planned: Network[]. Not implemented yet: the API returns 501 {status:"not_implemented",content}. Update the assertion once libvirt is wired.
+  Lists networks registered with libvirt for this hypervisor.
 }

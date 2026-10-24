@@ -7,20 +7,19 @@ meta {
 post {
   url: {{baseUrl}}{{apiPrefix}}/hypervisors/{{hypervisorId}}/networks
   body: json
-  auth: none
+  auth: inherit
 }
 
 body:json {
   {
-    "name": "net-01",
-    "bridge": "br0"
+    "name": "net-{{$guid}}"
   }
 }
 
 assert {
-  res.status: eq 501
+  res.status: eq 201
 }
 
 docs {
-  Body: NetworkRequest {name, bridge (optional)}. Planned: Network. Not implemented yet: the API returns 501 {status:"not_implemented",content}. Update the assertion once libvirt is wired.
+  Defines and starts an isolated network. The bridge is optional and libvirt may assign one automatically.
 }

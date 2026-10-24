@@ -1,0 +1,25 @@
+meta {
+  name: Lend VM
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{baseUrl}}{{apiPrefix}}/hypervisors/{{hypervisorId}}/vms/{{vmId}}/shares
+  body: json
+  auth: inherit
+}
+
+body:json {
+  {
+    "username": "{{username}}"
+  }
+}
+
+assert {
+  res.status: eq 201
+}
+
+docs {
+  Owner or admin. The borrower gets the console and start/stop, nothing else, and cannot lend further. Optional expires_at (Unix seconds). 409 if the VM has no owner.
+}

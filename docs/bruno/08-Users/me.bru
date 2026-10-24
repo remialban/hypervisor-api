@@ -1,0 +1,19 @@
+meta {
+  name: Me
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{baseUrl}}{{apiPrefix}}/me
+  body: none
+  auth: inherit
+}
+
+assert {
+  res.status: eq 200
+}
+
+docs {
+  The caller: role, quota and current usage (vms, vcpus, memory_mb, disk_gb).
+}

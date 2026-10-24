@@ -60,6 +60,16 @@ Cargo telecharge les dependances, dont `virt`, `sqlx`, `roxmltree`, `url`,
 
 ### Demarrer l'API avec l'hote noVNC
 
+Au premier démarrage, l'API crée un administrateur si la base est vide. Définissez
+son mot de passe (sinon il est généré et affiché une seule fois dans la console) :
+
+```bash
+ADMIN_PASSWORD='un mot de passe' JWT_SECRET="$(openssl rand -base64 48)" NOVNC_HOST=192.168.122.100 cargo run
+```
+
+Sans `JWT_SECRET`, une clé aléatoire est utilisée : les sessions ne survivent pas
+à un redémarrage. Voir [Authentification](#authentification).
+
 La variable `NOVNC_HOST` indique l'adresse utilisée par l'API pour construire
 l'URL noVNC retournée par l'endpoint VNC. Remplacez `192.168.122.100` par
 l'adresse accessible depuis le navigateur client :
@@ -95,14 +105,16 @@ noVNC sera alors accessible sur :
 http://192.168.122.100:6080/vnc.html
 ```
 
-Le fichier `vm.cfg` contient une ligne par VM au format attendu par
-`websockify` :
+Le fichier `vm.cfg` (variable `VM_CONFIG_PATH` côté API) contient une ligne par
+console ouverte, au format attendu par `websockify` :
 
 ```text
-UUID_DE_LA_VM: ADRESSE_HYPERVISEUR:PORT_VNC
+JETON_ALEATOIRE: ADRESSE_HYPERVISEUR:PORT_VNC
 ```
 
-Le fichier est mis à jour lorsqu'une requête est envoyée à :
+Chaque jeton est aléatoire et expire au bout de deux minutes (il disparaît alors
+du fichier). Le fichier est régénéré lorsqu'une requête, faite par quelqu'un qui a
+le droit d'accéder à la VM, est envoyée à :
 
 ```text
 GET /api/hypervisors/{hypervisor_id}/vms/{vm_id}/vnc
@@ -115,14 +127,14 @@ L'ordre recommandé est :
 
 1. démarrer l'API avec `NOVNC_HOST` ;
 2. démarrer `websockify` dans un autre terminal ;
-3. appeler l'endpoint VNC pour générer ou mettre à jour la ligne dans
-   `vm.cfg` ;
+3. appeler l'endpoint VNC pour générer un jeton et sa ligne dans `vm.cfg` ;
 4. ouvrir la valeur `novnc_url` retournée par l'API.
 
 Exemple d'appel de l'endpoint VNC :
 
 ```bash
-curl http://127.0.0.1:3000/api/hypervisors/<HYPERVISOR_ID>/vms/<VM_NAME>/vnc
+curl http://127.0.0.1:3000/api/hypervisors/<HYPERVISOR_ID>/vms/<VM_UUID>/vnc \
+  -H "Authorization: Bearer <access_token>"
 ```
 
 Arreter l'API ou `websockify` avec `Ctrl+C`.
@@ -134,28 +146,59 @@ Le Compose lance deux conteneurs distincts :
 - `api` : l'API Rust sur le port `3000` ;
 - `novnc` : noVNC et websockify sur le port `6080`.
 
-Les deux conteneurs utilisent le fichier `./vm.cfg`. L'API écrit les cibles
-VNC dans ce fichier, que websockify lit également. La base SQLite reste
-persistée dans `./data/api.db`.
+L'API garde sa base SQLite (`api.db`) dans `./data`. Les deux conteneurs partagent
+en plus un volume nommé `vnc-tokens` qui ne contient que le fichier de jetons
+`vm.cfg` : l'API l'écrit, websockify le relit à chaque connexion (en lecture
+seule). noVNC ne voit donc jamais la base ni les comptes. Les jetons noVNC sont
+aléatoires et expirent au bout de deux minutes.
 
-Créez un fichier `.env` à la racine du projet :
+Copiez `.env.example` en `.env` et adaptez-le. `JWT_SECRET` et `ADMIN_PASSWORD`
+sont obligatoires (Compose refuse de démarrer sans eux) :
 
 ```dotenv
 SSH_PRIVATE_KEY_HOST_PATH=/home/user/.ssh/id_ed25519
 NOVNC_URL=http://localhost:6080/vnc.html
+DOCKERHUB_USERNAME=remi
+TAG=latest
+JWT_SECRET=<au moins 32 caractères aléatoires, par exemple : openssl rand -base64 48>
+ADMIN_USERNAME=admin
+ADMIN_PASSWORD=<mot de passe du premier administrateur>
+CORS_ALLOWED_ORIGINS=http://localhost:4200
 ```
+
+`ADMIN_USERNAME` / `ADMIN_PASSWORD` ne servent qu'au premier démarrage, quand la
+base ne contient encore aucun compte. `CORS_ALLOWED_ORIGINS` liste les origines du
+front Angular autorisées à appeler l'API depuis un navigateur ; laissez-le vide si le
+front passe par un reverse proxy sur la même origine. Voir
+[docs/AUTH.md](docs/AUTH.md) pour toutes les variables.
+
+`DOCKERHUB_USERNAME` et `TAG` désignent les images publiées sur Docker Hub
+(`<utilisateur>/hypervisor-api:<tag>`). **Ajoutez toujours `--build`** tant que
+les images publiées ne contiennent pas l'authentification : sans lui, Compose
+utilise une image déjà présente ou téléchargée, qui peut être antérieure à ces
+changements et ignorerait `JWT_SECRET` et `ADMIN_PASSWORD`.
+
+Le Compose monte aussi `~/.ssh/known_hosts` de l'hôte dans l'API (pour les
+connexions `qemu+ssh`) : ce fichier doit exister.
 
 Puis lancez l'application :
 
 ```bash
-mkdir -p data
-touch vm.cfg
 docker compose up --build
 ```
 
 L'API est disponible sur `http://localhost:3000`, Swagger sur
 `http://localhost:3000/swagger-ui/` et noVNC sur
-`http://localhost:6080/vnc.html`.
+`http://localhost:6080/vnc.html`. Connectez-vous avec le compte administrateur
+(bouton **Authorize** de Swagger, ou `POST /api/auth/login`).
+
+Sauvegardez `./data/api.db` : il contient les comptes, les droits, les
+propriétaires de VM et le journal d'audit. Changer `JWT_SECRET` déconnecte tout
+le monde mais ne perd rien.
+
+Servez l'API et noVNC en HTTPS (reverse proxy) dès qu'elles sont accessibles
+autrement qu'en local : les mots de passe et les jetons circulent en clair sur
+HTTP.
 
 `NOVNC_URL` est l'URL de base utilisée par l'API pour construire la propriété
 `novnc_url` retournée par l'endpoint VNC. L'API ajoute automatiquement le
@@ -192,13 +235,45 @@ La base est creee automatiquement au demarrage :
 api.db
 ```
 
-Elle contient uniquement la table :
+Les tables sont créées par les migrations du dossier `migrations/`, appliquées
+automatiquement au démarrage. Elles contiennent :
 
-- `hypervisors`
+- `hypervisors` : les hyperviseurs enregistrés ;
+- `users`, `refresh_tokens` : comptes (mots de passe hachés en Argon2id), quotas, sessions ;
+- `hypervisor_access` : qui peut créer des VM sur quel hyperviseur ;
+- `vm_owners`, `vm_shares` : propriétaire de chaque VM et prêts en cours ;
+- `settings`, `vnc_tokens`, `audit_log` : réglages, jetons noVNC, journal.
 
-Les VM, disques et reseaux ne sont pas ecrits dans SQLite. Leur source de verite sera libvirt lorsque les handlers seront implementes.
+Les VM, disques et réseaux ne sont pas dans SQLite : leur source de vérité est
+libvirt. Seuls leur propriétaire et leurs prêts sont gardés ici, par UUID de VM.
 
 Ne pas supprimer `api.db` si les donnees doivent etre conservees.
+
+## Authentification
+
+Toutes les routes, sauf `/ping` et `/api/auth/*`, demandent un jeton
+`Authorization: Bearer <access_token>`.
+
+```bash
+# Se connecter (JWT de 15 minutes + refresh token à usage unique)
+curl -X POST http://127.0.0.1:3000/api/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"admin","password":"<ADMIN_PASSWORD>"}'
+
+# Utiliser le jeton
+curl http://127.0.0.1:3000/api/hypervisors -H "Authorization: Bearer <access_token>"
+```
+
+`POST /api/auth/token` accepte aussi le formulaire OAuth2 standard
+(`grant_type=password` ou `refresh_token`), ce qu'utilise le bouton **Authorize**
+de Swagger.
+
+Deux rôles : `admin` (tout) et `user`. Un `user` ne crée des VM que sur les
+hyperviseurs où un admin lui a donné accès, ne voit que ses VM et celles qu'on lui
+prête (console + démarrer/arrêter), et peut être soumis à des quotas. Les comptes
+sont créés par un admin ; l'inscription libre existe mais reste fermée tant qu'un
+admin ne l'ouvre pas. Le détail (matrice des droits, prêt de VM, quotas, journal
+d'audit, branchement du front Angular) est dans [docs/AUTH.md](docs/AUTH.md).
 
 ## Documentation interactive
 
@@ -224,18 +299,26 @@ Tester l'API :
 curl http://127.0.0.1:3000/ping
 ```
 
+Se connecter et garder le jeton (voir [Authentification](#authentification)) :
+
+```bash
+TOKEN=$(curl -s -X POST http://127.0.0.1:3000/api/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"admin","password":"<ADMIN_PASSWORD>"}' | jq -r .access_token)
+```
+
 Ajouter un hyperviseur local :
 
 ```bash
 curl -X POST http://127.0.0.1:3000/api/hypervisors \
-  -H 'Content-Type: application/json' \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
   -d '{"name":"kvm-local","uri":"qemu:///system"}'
 ```
 
 Lister les hyperviseurs :
 
 ```bash
-curl http://127.0.0.1:3000/api/hypervisors
+curl http://127.0.0.1:3000/api/hypervisors -H "Authorization: Bearer $TOKEN"
 ```
 
 L'URI libvirt doit etre joignable. Une URI invalide retourne `502 Bad Gateway`.
@@ -245,13 +328,19 @@ L'URI libvirt doit etre joignable. Une URI invalide retourne `502 Bad Gateway`.
 ```text
 src/
 ├── main.rs            Demarrage Axum, SQLite et Swagger
-├── state.rs           Pool SQLite et creation des tables
+├── state.rs           Pool SQLite, migrations et etat partage
+├── config.rs          Variables d'environnement (JWT, durees, CORS...)
+├── auth.rs            JWT, mots de passe Argon2, extracteur AuthUser
+├── users.rs           Login, comptes, quotas, reglages
+├── access.rs          Droits : roles, proprietaire de VM, acces hyperviseur, quotas
+├── shares.rs          Pret de VM et changement de proprietaire
+├── audit.rs           Journal d'audit
 ├── models.rs          Modeles JSON et SQLx
 ├── routes.rs          Declaration des routes
 ├── hypervisors.rs     CRUD hyperviseurs et controle libvirt
 ├── vms.rs             Routes VM, sans stockage local
 ├── infrastructure.rs  Routes disques et reseaux, sans stockage local
-├── vnc.rs             Routes VNC et proxy WebSocket
+├── vnc.rs             Jetons noVNC courts et fichier lu par websockify
 ├── common.rs          Reponses communes
 └── docs.rs            Specification OpenAPI
 ```

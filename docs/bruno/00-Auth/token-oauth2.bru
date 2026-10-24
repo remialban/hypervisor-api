@@ -1,0 +1,32 @@
+meta {
+  name: Login (OAuth2 form)
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{baseUrl}}{{apiPrefix}}/auth/token
+  body: formUrlEncoded
+  auth: none
+}
+
+body:form-urlencoded {
+  grant_type: password
+  username: {{adminUsername}}
+  password: {{adminPassword}}
+}
+
+assert {
+  res.status: eq 200
+}
+
+script:post-response {
+  if (res.status === 200) {
+    bru.setVar("accessToken", res.body.access_token);
+    bru.setVar("refreshToken", res.body.refresh_token);
+  }
+}
+
+docs {
+  Same login as an OAuth2 password grant (application/x-www-form-urlencoded). Use grant_type=refresh_token with refresh_token=... to renew.
+}

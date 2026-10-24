@@ -1,0 +1,25 @@
+meta {
+  name: Open / close registration
+  type: http
+  seq: 2
+}
+
+put {
+  url: {{baseUrl}}{{apiPrefix}}/settings
+  body: json
+  auth: inherit
+}
+
+body:json {
+  {
+    "registration_open": true
+  }
+}
+
+assert {
+  res.status: eq 200
+}
+
+docs {
+  Admin only. Opens or closes POST /auth/register.
+}

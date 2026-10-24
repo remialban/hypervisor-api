@@ -4,10 +4,13 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+argon2 = "0.5"
 axum = "0.8.9"
+jsonwebtoken = "9"
+rand_core = { version = "0.6", features = ["getrandom"] }
 roxmltree = "0.20"
 serde = { version = "1.0.229", features = ["derive"] }
-sqlx = { version = "0.8", default-features = false, features = ["sqlite", "runtime-tokio", "macros"] }
+sqlx = { version = "0.8", default-features = false, features = ["sqlite", "runtime-tokio", "macros", "migrate"] }
 tokio = { version = "1.53.2", features = ["full"] }
 url = "2"
 utoipa = { version = "5", features = ["axum_extras"] }
@@ -15,7 +18,16 @@ utoipa-swagger-ui = { version = "9", features = ["axum"] }
 uuid = { version = "1", features = ["v4"] }
 virt = "0.4"
 xmltree = "0.12.0"
+sha2 = "0.10"
+sysinfo = "0.30"
+tower-http = { version = "0.6", features = ["cors"] }
 
 [dev-dependencies]
 serde_json = "1.0.154"
 tower = { version = "0.5.3", features = ["util"] }
+
+# Argon2 is deliberately slow: without optimisation the tests would crawl.
+[profile.dev.package.argon2]
+opt-level = 3
+[profile.dev.package.blake2]
+opt-level = 3

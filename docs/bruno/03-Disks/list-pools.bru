@@ -1,0 +1,19 @@
+meta {
+  name: List storage pools
+  type: http
+  seq: 3
+}
+
+get {
+  url: {{baseUrl}}{{apiPrefix}}/hypervisors/{{hypervisorId}}/pools
+  body: none
+  auth: inherit
+}
+
+assert {
+  res.status: eq 200
+}
+
+docs {
+  Lists storage pools registered with libvirt for this hypervisor.
+}

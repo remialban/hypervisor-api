@@ -1,0 +1,19 @@
+meta {
+  name: Auth config
+  type: http
+  seq: 5
+}
+
+get {
+  url: {{baseUrl}}{{apiPrefix}}/auth/config
+  body: none
+  auth: none
+}
+
+assert {
+  res.status: eq 200
+}
+
+docs {
+  Public. {"registration_open": bool} tells the UI whether to show a sign-up form.
+}

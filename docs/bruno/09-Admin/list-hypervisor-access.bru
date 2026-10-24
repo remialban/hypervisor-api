@@ -1,0 +1,19 @@
+meta {
+  name: List hypervisor access
+  type: http
+  seq: 4
+}
+
+get {
+  url: {{baseUrl}}{{apiPrefix}}/hypervisors/{{hypervisorId}}/access
+  body: none
+  auth: inherit
+}
+
+assert {
+  res.status: eq 200
+}
+
+docs {
+  Admin only. Users allowed to create VMs on this hypervisor.
+}

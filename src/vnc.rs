@@ -1,96 +1,86 @@
-use std::collections::HashMap;
+//! Console access through noVNC + websockify.
+//!
+//! Each call creates a random, short-lived token (`VNC_TOKEN_TTL_SECONDS`) that maps to
+//! `host:port` of the VM display. websockify reads the mapping from a file generated from
+//! the `vnc_tokens` table, so a console URL stops working on its own and nobody can open a
+//! console by guessing a VM id. Access to the VM is checked before the token is issued.
+
+use std::{
+    path::{Path as FilePath, PathBuf},
+    time::Duration,
+};
 
 use axum::{
     Json,
     extract::{Path, State},
-    http::StatusCode,
 };
 use roxmltree::Document;
 use url::Url;
 use virt::{connect::Connect, domain::Domain};
 
-use crate::{models::VncResponse, state::SharedState};
-
-type ApiError = (StatusCode, Json<HashMap<String, String>>);
+use crate::{
+    access, audit,
+    auth::{self, AuthUser, now},
+    errors::ApiError,
+    models::{Message, VncResponse},
+    state::SharedState,
+};
 
 #[utoipa::path(
     get,
     path = "/api/hypervisors/{hypervisor_id}/vms/{vm_id}/vnc",
     params(
-        ("hypervisor_id" = String, Path, description = "Hôte ou IP de l'hyperviseur"),
+        ("hypervisor_id" = String, Path, description = "Hypervisor identifier"),
         ("vm_id" = String, Path, description = "UUID libvirt de la VM")
     ),
-    responses((status = 200, body = VncResponse)),
+    responses((status = 200, body = VncResponse), (status = 401, body = Message), (status = 404, body = Message), (status = 409, body = Message)),
     tag = "VNC"
 )]
 pub async fn connect(
     State(state): State<SharedState>,
+    user: AuthUser,
     Path((hypervisor_id, vm_id)): Path<(String, String)>,
 ) -> Result<Json<VncResponse>, ApiError> {
-    let uri: String = sqlx::query_scalar("SELECT uri FROM hypervisors WHERE id = ?")
-        .bind(&hypervisor_id)
-        .fetch_optional(&state.db)
-        .await
-        .map_err(|error| {
-            api_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Impossible de lire l'hyperviseur : {error}"),
-            )
-        })?
-        .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "Hyperviseur introuvable".to_owned()))?;
+    // Owner, borrower or admin.
+    access::vm_access(&state, &user, &hypervisor_id, &vm_id).await?;
+    let uri = crate::libvirt::hypervisor_uri(&state.db, &hypervisor_id).await?;
 
     let hypervisor_host = Url::parse(&uri)
         .map_err(|error| {
-            api_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("URI libvirt invalide : {error}"),
-            )
+            eprintln!("Invalid libvirt URI: {error}");
+            ApiError::Internal("Invalid hypervisor URI".into())
         })?
         .host_str()
+        .filter(|host| !host.is_empty())
         .unwrap_or("localhost")
         .to_owned();
 
-    // 1. Connexion à l'hyperviseur distant
-    let conn =
-        Connect::open(Some(&uri)).map_err(|e| api_error(StatusCode::BAD_GATEWAY, e.to_string()))?;
+    let lookup_id = vm_id.clone();
+    let (vm_uuid, vnc_port) = tokio::task::spawn_blocking(move || read_display(&uri, &lookup_id))
+        .await
+        .map_err(|e| ApiError::Internal(format!("Blocking task failed: {e}")))??;
 
-    // 2. Récupération du domaine par son UUID libvirt
-    let domain = Domain::lookup_by_uuid_string(&conn, &vm_id)
-        .map_err(|e| api_error(StatusCode::NOT_FOUND, e.to_string()))?;
-
-    let vm_uuid = domain
-        .get_uuid_string()
-        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-
-    let xml_desc = domain
-        .get_xml_desc(0)
-        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-
-    let doc = Document::parse(&xml_desc)
-        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-
-    let vnc_port = doc
-        .descendants()
-        .find(|n| n.has_tag_name("graphics") && n.attribute("type") == Some("vnc"))
-        .and_then(|n| n.attribute("port"))
-        .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "Aucun port VNC trouvé".to_owned()))?
-        .to_string();
-
-    if vnc_port == "-1" {
-        return Err(api_error(
-            StatusCode::CONFLICT,
-            "Le port VNC n'est pas encore attribué".to_owned(),
-        ));
-    }
-
-    let token = vm_uuid.clone();
+    let token = auth::random_token();
+    let expires_at = now() + state.config.vnc_ttl;
     let target = format!("{hypervisor_host}:{vnc_port}");
-    update_vm_config(&token, &target).await.map_err(|error| {
-        api_error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Impossible de mettre à jour vm.cfg : {error}"),
-        )
+    sqlx::query("INSERT INTO vnc_tokens (token, target, expires_at) VALUES (?, ?, ?)")
+        .bind(&token)
+        .bind(&target)
+        .bind(expires_at)
+        .execute(&state.db)
+        .await?;
+    sync_token_file(&state).await.map_err(|error| {
+        eprintln!("Could not write the websockify token file: {error}");
+        ApiError::Internal("Could not prepare the console".into())
     })?;
+    audit::record(
+        &state,
+        &user,
+        "vm.console",
+        &format!("{hypervisor_id}/{vm_uuid}"),
+        "",
+    )
+    .await;
 
     let novnc_url = match std::env::var("NOVNC_URL") {
         Ok(base_url) => build_novnc_url(&base_url, &token),
@@ -105,43 +95,94 @@ pub async fn connect(
     Ok(Json(VncResponse {
         hypervisor_id,
         vm_id,
-        uuid: token.clone(),
+        uuid: vm_uuid,
         host: hypervisor_host,
         port: vnc_port,
         token,
         novnc_url,
         status: "connected".to_owned(),
+        expires_at,
     }))
 }
 
-async fn update_vm_config(token: &str, target: &str) -> Result<(), std::io::Error> {
-    let path = std::env::var("VM_CONFIG_PATH").unwrap_or_else(|_| "vm.cfg".to_owned());
-    let current = match tokio::fs::read_to_string(&path).await {
-        Ok(content) => content,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
-        Err(error) => return Err(error),
-    };
+/// Reads the UUID and the VNC port of a VM from libvirt (blocking).
+fn read_display(uri: &str, vm_id: &str) -> Result<(String, String), ApiError> {
+    let conn = Connect::open(Some(uri))?;
+    let domain = Domain::lookup_by_uuid_string(&conn, vm_id)?;
+    let vm_uuid = domain.get_uuid_string()?;
+    let xml_desc = domain.get_xml_desc(0)?;
+    let doc = Document::parse(&xml_desc).map_err(|error| {
+        eprintln!("Invalid domain XML: {error}");
+        ApiError::Internal("Unreadable VM definition".into())
+    })?;
 
-    let entry = format!("{token}: {target}");
-    let mut found = false;
-    let mut lines = Vec::new();
+    let port = doc
+        .descendants()
+        .find(|n| n.has_tag_name("graphics") && n.attribute("type") == Some("vnc"))
+        .and_then(|n| n.attribute("port"))
+        .ok_or_else(|| ApiError::NotFound("No VNC port found".into()))?
+        .to_string();
+    if port == "-1" {
+        return Err(ApiError::Conflict(
+            "The VNC port is not assigned yet (is the VM running?)".into(),
+        ));
+    }
+    Ok((vm_uuid, port))
+}
 
-    for line in current.lines() {
-        if line.trim_start().starts_with(&format!("{token}:")) {
-            lines.push(entry.clone());
-            found = true;
-        } else {
-            lines.push(line.to_owned());
+/// Rewrites the file read by websockify from the tokens that are still valid.
+pub async fn sync_token_file(state: &SharedState) -> Result<(), std::io::Error> {
+    let _guard = state.vnc_file_lock.lock().await;
+    let tokens: Vec<(String, String)> = sqlx::query_as(
+        "SELECT token, target FROM vnc_tokens WHERE expires_at > ? ORDER BY expires_at",
+    )
+    .bind(now())
+    .fetch_all(&state.db)
+    .await
+    .map_err(std::io::Error::other)?;
+    let mut content = String::new();
+    for (token, target) in tokens {
+        content.push_str(&format!("{token}: {target}\n"));
+    }
+    write_replacing(&state.config.vnc_token_file, &content).await
+}
+
+/// Replaces the file in one step, so websockify never reads a half-written one. When the
+/// file itself is a bind mount it cannot be renamed over: it is then written in place.
+async fn write_replacing(path: &FilePath, content: &str) -> Result<(), std::io::Error> {
+    let mut temporary = path.as_os_str().to_owned();
+    temporary.push(".tmp");
+    let temporary = PathBuf::from(temporary);
+    tokio::fs::write(&temporary, content).await?;
+    if tokio::fs::rename(&temporary, path).await.is_err() {
+        let _ = tokio::fs::remove_file(&temporary).await;
+        tokio::fs::write(path, content).await?;
+    }
+    Ok(())
+}
+
+/// How often expired tokens leave the token file: a token lives at most this much longer
+/// than its lifetime.
+const CLEANUP_INTERVAL: Duration = Duration::from_secs(10);
+
+/// Forgets expired tokens now and then, so they leave the token file too.
+pub fn spawn_cleanup(state: SharedState) {
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(CLEANUP_INTERVAL).await;
+            let removed = sqlx::query("DELETE FROM vnc_tokens WHERE expires_at <= ?")
+                .bind(now())
+                .execute(&state.db)
+                .await
+                .map(|r| r.rows_affected())
+                .unwrap_or(0);
+            if removed > 0
+                && let Err(error) = sync_token_file(&state).await
+            {
+                eprintln!("Could not clean the websockify token file: {error}");
+            }
         }
-    }
-
-    if !found {
-        lines.push(entry);
-    }
-
-    let mut content = lines.join("\n");
-    content.push('\n');
-    tokio::fs::write(path, content).await
+    });
 }
 
 fn build_novnc_url(base_url: &str, token: &str) -> String {
@@ -149,9 +190,15 @@ fn build_novnc_url(base_url: &str, token: &str) -> String {
     format!("{page_url}?path=websockify/?token={token}&autoconnect=true")
 }
 
-fn api_error(status: StatusCode, message: String) -> ApiError {
-    let mut values = HashMap::new();
-    values.insert("status".to_owned(), "error".to_owned());
-    values.insert("message".to_owned(), message);
-    (status, Json(values))
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_novnc_url_carries_the_token() {
+        assert_eq!(
+            build_novnc_url("http://host:6080/vnc.html?old=1", "abc"),
+            "http://host:6080/vnc.html?path=websockify/?token=abc&autoconnect=true"
+        );
+    }
 }

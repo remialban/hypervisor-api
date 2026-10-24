@@ -1,0 +1,28 @@
+meta {
+  name: Set quota
+  type: http
+  seq: 8
+}
+
+put {
+  url: {{baseUrl}}{{apiPrefix}}/users/{{userId}}/quota
+  body: json
+  auth: inherit
+}
+
+body:json {
+  {
+    "max_vms": 5,
+    "max_vcpus": 8,
+    "max_memory_mb": 16384,
+    "max_disk_gb": 200
+  }
+}
+
+assert {
+  res.status: eq 200
+}
+
+docs {
+  Admin only. Replaces the whole quota: null (or a missing field) = no limit, which is the default.
+}

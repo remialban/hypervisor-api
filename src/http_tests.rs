@@ -18,25 +18,37 @@ use tower::ServiceExt;
 use uuid::Uuid;
 use virt::{connect::Connect, domain::Domain, storage_pool::StoragePool, storage_vol::StorageVol};
 
-use crate::{routes, state::AppState};
+use crate::{auth, config::Config, routes, state::AppState};
 
-const POOL: &str = "default-pool";
+pub(crate) const POOL: &str = "default-pool";
 
 // ---------- HTTP helpers ----------
 
-struct TestApp {
-    router: Router,
-    hypervisor_id: String,
+pub(crate) struct TestApp {
+    pub(crate) router: Router,
+    pub(crate) hypervisor_id: String,
+    pub(crate) state: Arc<AppState>,
+    /// Access token of an administrator: `send` uses it, so the VM tests below run as admin.
+    pub(crate) admin_token: String,
 }
 
 impl TestApp {
     /// A fresh API with its own in-memory SQLite and one hypervisor using the test driver.
-    async fn new() -> Self {
+    pub(crate) async fn new() -> Self {
         let db_url = format!(
             "sqlite:file:{}?mode=memory&cache=shared",
             Uuid::new_v4().simple()
         );
-        let state = Arc::new(AppState::new(&db_url).await.expect("in-memory SQLite"));
+        let config = Config {
+            vnc_token_file: std::env::temp_dir().join(format!("vm-{}.cfg", Uuid::new_v4())),
+            ..Config::default()
+        };
+        let state = Arc::new(
+            AppState::with_config(&db_url, config)
+                .await
+                .expect("in-memory SQLite"),
+        );
+        let (_, admin_token) = insert_user(&state, "root-test", "admin").await;
         let hypervisor_id = Uuid::new_v4().to_string();
         sqlx::query("INSERT INTO hypervisors (id, name, uri, status) VALUES (?, 'test', 'test:///default', 'connected')")
             .bind(&hypervisor_id)
@@ -44,18 +56,35 @@ impl TestApp {
             .await
             .unwrap();
         Self {
-            router: routes::create_routes(state),
+            router: routes::create_routes(Arc::clone(&state)),
             hypervisor_id,
+            state,
+            admin_token,
         }
     }
 
-    async fn send(
+    pub(crate) async fn send(
         &self,
         method: Method,
         path: &str,
         body: Option<Value>,
     ) -> (StatusCode, header::HeaderMap, Value) {
+        self.send_as(Some(&self.admin_token), method, path, body)
+            .await
+    }
+
+    /// Sends a request with the given access token (or none at all).
+    pub(crate) async fn send_as(
+        &self,
+        token: Option<&str>,
+        method: Method,
+        path: &str,
+        body: Option<Value>,
+    ) -> (StatusCode, header::HeaderMap, Value) {
         let mut request = Request::builder().method(method).uri(path);
+        if let Some(token) = token {
+            request = request.header(header::AUTHORIZATION, format!("Bearer {token}"));
+        }
         let body = match body {
             Some(json) => {
                 request = request.header(header::CONTENT_TYPE, "application/json");
@@ -75,21 +104,37 @@ impl TestApp {
         (parts.status, parts.headers, json)
     }
 
-    fn vms(&self) -> String {
+    pub(crate) fn vms(&self) -> String {
         format!("/api/hypervisors/{}/vms", self.hypervisor_id)
     }
 
-    fn vm(&self, vm_id: &str) -> String {
+    pub(crate) fn vm(&self, vm_id: &str) -> String {
         format!("{}/{vm_id}", self.vms())
     }
 
-    async fn status_of(&self, method: Method, path: &str) -> (StatusCode, Value) {
+    pub(crate) async fn status_of(&self, method: Method, path: &str) -> (StatusCode, Value) {
         let (status, _, json) = self.send(method, path, None).await;
         (status, json)
     }
 
+    /// Like `status_of`, as the holder of `token`.
+    pub(crate) async fn status_as(
+        &self,
+        token: &str,
+        method: Method,
+        path: &str,
+    ) -> (StatusCode, Value) {
+        let (status, _, json) = self.send_as(Some(token), method, path, None).await;
+        (status, json)
+    }
+
+    /// Creates an account (with a made-up password hash) and returns its id and access token.
+    pub(crate) async fn user(&self, username: &str, role: &str) -> (String, String) {
+        insert_user(&self.state, username, role).await
+    }
+
     /// Waits for a job to leave the `running` state and returns it.
-    async fn wait_job(&self, job_id: &str) -> Value {
+    pub(crate) async fn wait_job(&self, job_id: &str) -> Value {
         for _ in 0..200 {
             let (status, job) = self
                 .status_of(Method::GET, &format!("/api/jobs/{job_id}"))
@@ -104,7 +149,7 @@ impl TestApp {
     }
 
     /// Asks for a clone and waits for the job to finish.
-    async fn clone_vm(&self, vm_id: &str, name: &str) -> Value {
+    pub(crate) async fn clone_vm(&self, vm_id: &str, name: &str) -> Value {
         let (status, _, job) = self
             .send(
                 Method::POST,
@@ -117,18 +162,31 @@ impl TestApp {
     }
 }
 
+async fn insert_user(state: &Arc<AppState>, username: &str, role: &str) -> (String, String) {
+    let id = Uuid::new_v4().to_string();
+    sqlx::query("INSERT INTO users (id, username, password_hash, role, created_at) VALUES (?, ?, 'x', ?, 0)")
+        .bind(&id)
+        .bind(username)
+        .bind(role)
+        .execute(&state.db)
+        .await
+        .unwrap();
+    let token = auth::issue_access_token(state, &id).unwrap();
+    (id, token)
+}
+
 // ---------- libvirt fixtures (direct calls on the test driver) ----------
 
-fn unique(prefix: &str) -> String {
+pub(crate) fn unique(prefix: &str) -> String {
     format!("{prefix}-{}", &Uuid::new_v4().simple().to_string()[..8])
 }
 
-fn connect() -> Connect {
+pub(crate) fn connect() -> Connect {
     Connect::open(Some("test:///default")).unwrap()
 }
 
 /// Creates a volume in the test pool and returns its path.
-fn create_volume(name: &str) -> String {
+pub(crate) fn create_volume(name: &str) -> String {
     let conn = connect();
     let pool = StoragePool::lookup_by_name(&conn, POOL).unwrap();
     let xml = format!(
@@ -145,7 +203,7 @@ fn volume_exists(path: &str) -> bool {
 }
 
 /// Defines a stopped VM with the given disk files and returns its UUID.
-fn define_vm(name: &str, disks: &[&str]) -> String {
+pub(crate) fn define_vm(name: &str, disks: &[&str]) -> String {
     let disks: String = disks
         .iter()
         .enumerate()
@@ -676,7 +734,7 @@ async fn vm_options_of_an_unknown_hypervisor_is_404() {
 // ---------- create ----------
 
 impl TestApp {
-    async fn create(&self, body: Value) -> (StatusCode, Value) {
+    pub(crate) async fn create(&self, body: Value) -> (StatusCode, Value) {
         let (status, _, json) = self.send(Method::POST, &self.vms(), Some(body)).await;
         (status, json)
     }
