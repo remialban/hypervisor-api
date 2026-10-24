@@ -1,33 +1,48 @@
 services:
   api:
+    image: ${DOCKERHUB_USERNAME:-remi}/hypervisor-api:${TAG:-latest}
     build:
       context: .
       dockerfile: Dockerfile
+    container_name: hypervisor-api
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
     environment:
       DATABASE_URL: sqlite:///data/api.db?mode=rwc
       VM_CONFIG_PATH: /data/vm.cfg
-      SSH_PRIVATE_KEY_PATH: /run/secrets/ssh_private_key
       NOVNC_URL: ${NOVNC_URL:-http://localhost:6080/vnc.html}
-    ports:
-      - "3000:3000"
+      SSH_PRIVATE_KEY_PATH: /run/secrets/ssh_private_key
     volumes:
+      # Persistance de la base de données et configuration partagée
       - ./data:/data
       - ./vm.cfg:/data/vm.cfg
+      # Accès au socket libvirt de l'hôte (hyperviseurs locaux)
       - /var/run/libvirt/libvirt-sock:/var/run/libvirt/libvirt-sock
-      - ${SSH_PRIVATE_KEY_HOST_PATH:?SSH_PRIVATE_KEY_HOST_PATH doit pointer vers la clé privée}:/run/secrets/ssh_private_key:ro
-    restart: unless-stopped
+      # Clé privée SSH pour la connexion aux hyperviseurs distants
+      - ${SSH_PRIVATE_KEY_HOST_PATH:-~/.ssh/id_ed25519}:/run/secrets/ssh_private_key:ro
+      - ${SSH_PRIVATE_KEY_HOST_PATH:-~/.ssh/id_ed25519}:/root/.ssh/id_ed25519:ro
+      - $HOME/.ssh/known_hosts:/root/.ssh/known_hosts:ro
+    networks:
+      - hypervisor-net
 
   novnc:
+    image: ${DOCKERHUB_USERNAME:-remi}/hypervisor-novnc:${TAG:-latest}
     build:
       context: .
       dockerfile: Dockerfile.novnc
-    environment:
-      VM_CONFIG_PATH: /data/vm.cfg
+    container_name: hypervisor-novnc
+    restart: unless-stopped
     ports:
       - "6080:6080"
     volumes:
-      - ./data:/data
-      - ./vm.cfg:/data/vm.cfg
+      # Fichier de tokens mis à jour par l'API et lu par websockify
+      - ./vm.cfg:/etc/novnc/vm.cfg:ro
     depends_on:
       - api
-    restart: unless-stopped
+    networks:
+      - hypervisor-net
+
+networks:
+  hypervisor-net:
+    driver: bridge
