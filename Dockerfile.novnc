@@ -7,7 +7,7 @@ RUN apt-get update && apt-get install -y \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Le fichier token -> hôte:port est écrit par l'API dans le volume partagé /data
+# Le fichier token -> hôte:port est écrit par l'API dans le volume partagé /vnc
 # (variable VM_CONFIG_PATH, lue par le script de démarrage).
 COPY docker/novnc-entrypoint.sh /usr/local/bin/novnc-entrypoint.sh
 RUN chmod +x /usr/local/bin/novnc-entrypoint.sh

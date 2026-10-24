@@ -146,9 +146,11 @@ Le Compose lance deux conteneurs distincts :
 - `api` : l'API Rust sur le port `3000` ;
 - `novnc` : noVNC et websockify sur le port `6080`.
 
-Les deux conteneurs partagent le dossier `./data` : l'API y écrit la base SQLite
-(`api.db`) et le fichier de jetons `vm.cfg` que websockify relit à chaque
-connexion. Les jetons noVNC sont aléatoires et expirent au bout de deux minutes.
+L'API garde sa base SQLite (`api.db`) dans `./data`. Les deux conteneurs partagent
+en plus un volume nommé `vnc-tokens` qui ne contient que le fichier de jetons
+`vm.cfg` : l'API l'écrit, websockify le relit à chaque connexion (en lecture
+seule). noVNC ne voit donc jamais la base ni les comptes. Les jetons noVNC sont
+aléatoires et expirent au bout de deux minutes.
 
 Copiez `.env.example` en `.env` et adaptez-le. `JWT_SECRET` et `ADMIN_PASSWORD`
 sont obligatoires (Compose refuse de démarrer sans eux) :
@@ -156,6 +158,8 @@ sont obligatoires (Compose refuse de démarrer sans eux) :
 ```dotenv
 SSH_PRIVATE_KEY_HOST_PATH=/home/user/.ssh/id_ed25519
 NOVNC_URL=http://localhost:6080/vnc.html
+DOCKERHUB_USERNAME=remi
+TAG=latest
 JWT_SECRET=<au moins 32 caractères aléatoires, par exemple : openssl rand -base64 48>
 ADMIN_USERNAME=admin
 ADMIN_PASSWORD=<mot de passe du premier administrateur>
@@ -167,6 +171,15 @@ base ne contient encore aucun compte. `CORS_ALLOWED_ORIGINS` liste les origines 
 front Angular autorisées à appeler l'API depuis un navigateur ; laissez-le vide si le
 front passe par un reverse proxy sur la même origine. Voir
 [docs/AUTH.md](docs/AUTH.md) pour toutes les variables.
+
+`DOCKERHUB_USERNAME` et `TAG` désignent les images publiées sur Docker Hub
+(`<utilisateur>/hypervisor-api:<tag>`). **Ajoutez toujours `--build`** tant que
+les images publiées ne contiennent pas l'authentification : sans lui, Compose
+utilise une image déjà présente ou téléchargée, qui peut être antérieure à ces
+changements et ignorerait `JWT_SECRET` et `ADMIN_PASSWORD`.
+
+Le Compose monte aussi `~/.ssh/known_hosts` de l'hôte dans l'API (pour les
+connexions `qemu+ssh`) : ce fichier doit exister.
 
 Puis lancez l'application :
 

@@ -130,7 +130,7 @@ Les mots de passe et jetons n'y figurent jamais. Filtres : `user_id`, `action`, 
 | `VNC_TOKEN_TTL_SECONDS` | Durée d'un jeton noVNC | `120` |
 | `CORS_ALLOWED_ORIGINS` | Origines autorisées à appeler l'API depuis un navigateur, séparées par des virgules | aucune |
 | `DATABASE_URL` | Base SQLite | `sqlite://api.db?mode=rwc` |
-| `VM_CONFIG_PATH` | Fichier de jetons de websockify | `vm.cfg` |
+| `VM_CONFIG_PATH` | Fichier de jetons de websockify | `vm.cfg` (`/vnc/vm.cfg` dans Docker) |
 
 ## Brancher le front Angular (`hypervisor-ui`)
 

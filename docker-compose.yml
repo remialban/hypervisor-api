@@ -1,15 +1,20 @@
 services:
   api:
+    image: ${DOCKERHUB_USERNAME:-remi}/hypervisor-api:${TAG:-latest}
     build:
       context: .
       dockerfile: Dockerfile
+    container_name: hypervisor-api
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
     environment:
-      # Base SQLite (comptes, droits, propriétaires de VM, audit) et fichier de tokens noVNC :
-      # les deux vivent dans le volume ./data, partagé avec le conteneur noVNC.
+      # Base SQLite : comptes, droits, propriétaires de VM, audit (volume ./data).
       DATABASE_URL: sqlite:///data/api.db?mode=rwc
-      VM_CONFIG_PATH: /data/vm.cfg
-      SSH_PRIVATE_KEY_PATH: /run/secrets/ssh_private_key
+      # Fichier de jetons noVNC, dans le volume partagé avec le conteneur noVNC (et lui seul).
+      VM_CONFIG_PATH: /vnc/vm.cfg
       NOVNC_URL: ${NOVNC_URL:-http://localhost:6080/vnc.html}
+      SSH_PRIVATE_KEY_PATH: /run/secrets/ssh_private_key
       # Authentification. Le secret signe les JWT : 32 caractères minimum, à garder secret.
       JWT_SECRET: ${JWT_SECRET:?JWT_SECRET doit être défini (32 caractères minimum, voir .env.example)}
       ACCESS_TOKEN_TTL_SECONDS: ${ACCESS_TOKEN_TTL_SECONDS:-900}
@@ -21,25 +26,43 @@ services:
       # Origines du front Angular autorisées à appeler l'API depuis un navigateur (CORS),
       # séparées par des virgules. Vide = même origine uniquement (front derrière un proxy).
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-}
-    ports:
-      - "3000:3000"
     volumes:
+      # Persistance de la base de données
       - ./data:/data
+      # Jetons noVNC (volume nommé, partagé avec le conteneur noVNC : il ne contient rien d'autre)
+      - vnc-tokens:/vnc
+      # Accès au socket libvirt de l'hôte (hyperviseurs locaux)
       - /var/run/libvirt/libvirt-sock:/var/run/libvirt/libvirt-sock
-      - ${SSH_PRIVATE_KEY_HOST_PATH:?SSH_PRIVATE_KEY_HOST_PATH doit pointer vers la clé privée}:/run/secrets/ssh_private_key:ro
-    restart: unless-stopped
+      # Clé privée SSH pour la connexion aux hyperviseurs distants
+      - ${SSH_PRIVATE_KEY_HOST_PATH:-~/.ssh/id_ed25519}:/run/secrets/ssh_private_key:ro
+      - ${SSH_PRIVATE_KEY_HOST_PATH:-~/.ssh/id_ed25519}:/root/.ssh/id_ed25519:ro
+      - $HOME/.ssh/known_hosts:/root/.ssh/known_hosts:ro
+    networks:
+      - hypervisor-net
 
   novnc:
+    image: ${DOCKERHUB_USERNAME:-remi}/hypervisor-novnc:${TAG:-latest}
     build:
       context: .
       dockerfile: Dockerfile.novnc
-    environment:
-      VM_CONFIG_PATH: /data/vm.cfg
+    container_name: hypervisor-novnc
+    restart: unless-stopped
     ports:
       - "6080:6080"
-    # Le dossier (et non le fichier) est monté : l'API remplace vm.cfg de façon atomique.
+    environment:
+      VM_CONFIG_PATH: /vnc/vm.cfg
     volumes:
-      - ./data:/data
+      # Jetons mis à jour par l'API (remplacement atomique du fichier) et lus par websockify.
+      # On monte le volume entier et en lecture seule : noVNC ne voit ni la base ni les comptes.
+      - vnc-tokens:/vnc:ro
     depends_on:
       - api
-    restart: unless-stopped
+    networks:
+      - hypervisor-net
+
+volumes:
+  vnc-tokens:
+
+networks:
+  hypervisor-net:
+    driver: bridge
