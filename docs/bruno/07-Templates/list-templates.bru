@@ -1,0 +1,21 @@
+meta {
+  name: List templates
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{baseUrl}}{{apiPrefix}}/hypervisors/{{hypervisorId}}/templates
+  body: none
+  auth: inherit
+}
+
+assert {
+  res.status: eq 200
+}
+
+docs {
+  Templates of the hypervisor. Needs a grant on it (admins have it everywhere).
+  Admins see every template with its packer_config and, when the build failed, its error.
+  Users only see the created ones, without packer_config nor error.
+}

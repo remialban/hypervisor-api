@@ -1,0 +1,20 @@
+meta {
+  name: Delete template
+  type: http
+  seq: 4
+}
+
+delete {
+  url: {{baseUrl}}{{apiPrefix}}/hypervisors/{{hypervisorId}}/templates/{{templateId}}
+  body: none
+  auth: inherit
+}
+
+assert {
+  res.status: eq 204
+}
+
+docs {
+  Admin only. Deletes the template and its disk volume. VMs created from it keep their own copy.
+  409 while the template is still being built.
+}

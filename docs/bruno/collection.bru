@@ -1,18 +1,25 @@
+headers {
+  Accept: application/json
+}
+
 auth {
   mode: bearer
 }
 
 auth:bearer {
-  token: {{accessToken}}
+  token: eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJzdWIiOiI1ZTllZGJjOS01OWExLTRmNzctOTQxMy04Nzk1OTNkMDdhMzkiLCJpc3MiOiJoeXBlcnZpc29yLWFwaSIsImlhdCI6MTc5Mjg2MDcyMSwiZXhwIjoxNzkyODYxNjIxfQ.fMPykMTHRXz1B4MseJP8zJtrtTzqlzrawIZCE340CfE
 }
 
-headers {
-  Accept: application/json
+vars:pre-request {
+  baseUrl: http://localhost:3000
+  adminPassword: change-me-please
+  apiPrefix: /api
+  hypervisorId: b24139f9-220d-4efa-b416-a14b54678ef0
 }
 
 docs {
   # KVM Multi-Hypervisor API
-
+  
   Collection derived from the Rust source code (`src/routes.rs`, `src/models.rs`, handlers).
   See `docs/bruno/README.md` for variables, run order and how to keep it in sync with Swagger.
 }

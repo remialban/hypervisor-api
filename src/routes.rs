@@ -11,6 +11,7 @@ use crate::{
     jobs,
     shares,
     state::SharedState,
+    templates,
     users,
     vm_options,
     vms,
@@ -116,6 +117,18 @@ pub fn create_routes(state: SharedState) -> Router {
         .route(
             "/api/hypervisors/{hypervisor_id}/vm-options",
             get(vm_options::get),
+        )
+        .route(
+            "/api/hypervisors/{hypervisor_id}/templates",
+            get(templates::list).post(templates::create),
+        )
+        .route(
+            "/api/hypervisors/{hypervisor_id}/templates/{template_id}",
+            get(templates::get).delete(templates::delete),
+        )
+        .route(
+            "/api/hypervisors/{hypervisor_id}/templates/{template_id}/vms",
+            post(templates::create_vm),
         )
         .route("/api/jobs/{job_id}", get(jobs::get))
         .with_state(state)

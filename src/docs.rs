@@ -14,7 +14,7 @@ use crate::{
         Hypervisor, Message, Network, NetworkRequest, StoragePool, StoragePoolRequest,
         UpdateHypervisor, VirtualMachine, VncResponse, VolumeRef,
     },
-    shares, users, vm_options, vms, vnc,
+    shares, templates, users, vm_options, vms, vnc,
 };
 
 /// Every route needs a token, except the ones marked `security(())`. Swagger UI's
@@ -104,6 +104,11 @@ impl Modify for SecurityAddon {
         infrastructure::list_networks,
         infrastructure::create_network,
         vnc::connect,
+        templates::list,
+        templates::get,
+        templates::create,
+        templates::delete,
+        templates::create_vm,
         jobs::get,
         vm_options::get
     ),
@@ -152,7 +157,11 @@ impl Modify for SecurityAddon {
         audit::AuditEntry,
         shares::ShareView,
         shares::CreateShare,
-        shares::ChangeOwner
+        shares::ChangeOwner,
+        templates::Template,
+        templates::TemplateStatus,
+        templates::CreateTemplate,
+        templates::CreateVmFromTemplate
     )),
     tags(
         (name = "Auth", description = "Login (OAuth2 password grant, JWT) and registration"),
@@ -163,6 +172,7 @@ impl Modify for SecurityAddon {
         (name = "Hypervisors", description = "Hypervisor management"),
         (name = "VMs", description = "Virtual machine management"),
         (name = "Jobs", description = "Background operations"),
+        (name = "Templates", description = "Disk images built with Packer, and VMs created from them"),
         (name = "Infrastructure", description = "Disks, networks and VNC")
     )
 )]

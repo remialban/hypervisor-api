@@ -1,0 +1,45 @@
+meta {
+  name: Create template
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{baseUrl}}{{apiPrefix}}/hypervisors/{{hypervisorId}}/templates
+  body: json
+  auth: inherit
+}
+
+body:json {
+  {
+    "name": "debian-12",
+    "packer_config": "packer {\n  required_plugins {\n    qemu = {\n      source  = \"github.com/hashicorp/qemu\"\n      version = \">= 1.1.0\"\n    }\n  }\n}\n\nsource \"qemu\" \"debian\" {\n  iso_url          = \"https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-genericcloud-amd64.qcow2\"\n  iso_checksum     = \"file:https://cloud.debian.org/images/cloud/bookworm/latest/SHA512SUMS\"\n  disk_image       = true\n  disk_size        = \"10G\"\n  format           = \"qcow2\"\n  vm_name          = \"debian-12.qcow2\"\n  output_directory = \"output\"\n  headless         = true\n  accelerator      = \"kvm\"\n  memory           = 1024\n\n  cd_label = \"cidata\"\n  cd_content = {\n    \"meta-data\" = \"instance-id: packer\\nlocal-hostname: debian-12\\n\"\n    \"user-data\" = <<-EOF\n      #cloud-config\n      ssh_pwauth: true\n      users:\n        - name: packer\n          plain_text_passwd: packer\n          lock_passwd: false\n          sudo: ALL=(ALL) NOPASSWD:ALL\n          shell: /bin/bash\n    EOF\n  }\n\n  communicator     = \"ssh\"\n  ssh_username     = \"packer\"\n  ssh_password     = \"packer\"\n  ssh_timeout      = \"10m\"\n  shutdown_command = \"sudo shutdown -P now\"\n}\n\nbuild {\n  sources = [\"source.qemu.debian\"]\n\n  provisioner \"shell\" {\n    inline = [\n      \"sudo apt-get update\",\n      \"sudo DEBIAN_FRONTEND=noninteractive apt-get -y upgrade\",\n      \"sudo cloud-init clean --logs\",\n      \"sudo passwd -l packer\",\n    ]\n  }\n}\n",
+    "disk_name": "debian-12.qcow2",
+    "pool": "default"
+  }
+}
+
+assert {
+  res.status: eq 202
+}
+
+script:post-response {
+  if (res.status === 202) { bru.setVar("templateId", res.body.id); }
+}
+
+docs {
+  Admin only: a Packer configuration runs commands on the build host.
+  Body: CreateTemplate {name, packer_config, disk_name, pool (default "default")}.
+  disk_name is the file name of the image Packer writes (vm_name of the qemu builder).
+
+  The example builds Debian 12 from the official cloud image: cloud-init (cd_content) creates
+  the "packer" account Packer connects with over SSH; it is locked at the end of the build.
+  Only this one file reaches Packer, so everything (cloud-init, scripts) must be inline.
+  The build host needs packer, qemu-system-x86_64, qemu-img, virsh, xorriso (for cd_content),
+  /dev/kvm and Internet access. Expect 3 to 10 minutes.
+
+  Asynchronous: returns 202 with the template in state "pending" (Location: .../templates/{id}).
+  Poll "Get template" until status is "created" or "failed" (error holds the end of the output).
+  Packer runs on the hypervisor over SSH for a qemu+ssh:// URI, on the API host for a local URI.
+  The disk lands in the pool as template-<name>.qcow2.
+}

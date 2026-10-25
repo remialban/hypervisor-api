@@ -17,6 +17,7 @@ mod models;
 mod routes;
 mod shares;
 mod state;
+mod templates;
 mod users;
 mod vm_create;
 mod vm_options;

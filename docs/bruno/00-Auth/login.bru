@@ -17,6 +17,11 @@ body:json {
   }
 }
 
+vars:pre-request {
+  adminUsername: admin
+  apiPrefix: /api
+}
+
 assert {
   res.status: eq 200
 }
