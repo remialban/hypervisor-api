@@ -36,10 +36,27 @@ services:
       - vnc-tokens:/vnc
       # Accès au socket libvirt de l'hôte (hyperviseurs locaux)
       - /var/run/libvirt/libvirt-sock:/var/run/libvirt/libvirt-sock
-      # Clé privée SSH pour la connexion aux hyperviseurs distants
-      - ${SSH_PRIVATE_KEY_HOST_PATH:-~/.ssh/id_ed25519}:/run/secrets/ssh_private_key:ro
-      - ${SSH_PRIVATE_KEY_HOST_PATH:-~/.ssh/id_ed25519}:/root/.ssh/id_ed25519:ro
-      - $HOME/.ssh/known_hosts:/root/.ssh/known_hosts:ro
+      # Clé privée SSH pour la connexion aux hyperviseurs distants (qemu+ssh), et les clés
+      # d'hôtes connues. create_host_path: false : un chemin qui n'existe pas fait échouer le
+      # démarrage, au lieu que Docker crée un dossier vide à sa place (ssh l'ignorerait).
+      - type: bind
+        source: ${SSH_PRIVATE_KEY_HOST_PATH:-${HOME}/.ssh/id_ed25519}
+        target: /run/secrets/ssh_private_key
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${SSH_PRIVATE_KEY_HOST_PATH:-${HOME}/.ssh/id_ed25519}
+        target: /root/.ssh/id_ed25519
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${HOME}/.ssh/known_hosts
+        target: /root/.ssh/known_hosts
+        read_only: true
+        bind:
+          create_host_path: false
     networks:
       - hypervisor-net
 
