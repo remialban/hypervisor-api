@@ -2,8 +2,9 @@
 
 API Rust avec Axum pour enregistrer plusieurs hyperviseurs KVM et gerer leurs ressources.
 
-**Pour installer et lancer le projet (développement ou Docker), suivez
-[INSTALLATION.md](INSTALLATION.md).** Le fonctionnement de l'API et du frontend dans Docker
+**Pour lancer l'API, noVNC et l'interface web en quelques commandes, suivez
+[GUIDE_INSTALLATION.md](GUIDE_INSTALLATION.md).** Pour tous les détails (développement ou
+Docker), voir [INSTALLATION.md](INSTALLATION.md). Le fonctionnement de l'API et du frontend dans Docker
 (conteneurs, ports, réseaux, schémas) est décrit dans [docs/DOCKER.md](docs/DOCKER.md).
 
 ## Fonctionnalites
