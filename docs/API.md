@@ -1,124 +1,162 @@
-# Documentation API
+# Référence de l'API
 
-Base URL : `http://127.0.0.1:3000` (API lancée avec `cargo run`, ou port local du Compose).
+Toutes les routes de l'API, regroupées par thème. La référence générée depuis le code, avec
+chaque champ et chaque code de réponse, est dans Swagger : `/swagger-ui/` (et la
+spécification brute sur `/api-docs/openapi.json`).
 
-Avec Docker Compose, l'accès depuis le réseau passe par HAProxy en HTTPS : même chemins,
-sur `https://<serveur>` (par exemple `https://kvm.example.com/api/hypervisors`). Voir
-[HAPROXY.md](HAPROXY.md).
+Le fonctionnement d'ensemble est décrit dans [ARCHITECTURE.md](ARCHITECTURE.md), les droits
+en détail dans [AUTH.md](AUTH.md).
 
-## Authentification
+## Conventions
 
-Toutes les routes demandent `Authorization: Bearer <access_token>`, sauf `/ping`, `/api/auth/*` et la documentation. Sans jeton valide : `401`. Rôle ou droit insuffisant : `403`. Ressource sur laquelle l'appelant n'a aucun droit : `404`. Le fonctionnement complet (rôles, matrice des droits, prêt, quotas, audit, front Angular) est dans [AUTH.md](AUTH.md).
+### Adresse
+
+| Contexte | Adresse de base |
+|---|---|
+| Développement (`cargo run`) | `http://127.0.0.1:3000` |
+| Docker, depuis le réseau | `https://<serveur>:8443` (HAProxy de l'API) |
+| Depuis l'application web | `https://<serveur>/api/…` (relayé par l'interface) |
+
+Dans les exemples, les chemins sont relatifs à cette adresse.
+
+### Authentification
+
+Toutes les routes demandent `Authorization: Bearer <access_token>`, sauf `/ping`,
+`/api/auth/*` et la documentation (`/swagger-ui`, `/api-docs`).
+
+```bash
+TOKEN=$(curl -s -X POST http://127.0.0.1:3000/api/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"admin","password":"…"}' | jq -r .access_token)
+
+curl http://127.0.0.1:3000/api/hypervisors -H "Authorization: Bearer $TOKEN"
+```
+
+Le jeton d'accès dure 15 minutes. Le `refresh_token`, à usage unique, en donne un nouveau
+(`POST /api/auth/refresh`).
+
+### Codes de réponse et erreurs
+
+| Code | Sens |
+|---|---|
+| `200`, `201`, `204` | Réussite (`204` : pas de corps). |
+| `202` | Opération lancée en arrière-plan : suivre la **tâche** (voir ci-dessous) ou la ressource indiquée par l'en-tête `Location`. |
+| `400` | Corps ou paramètre invalide. |
+| `401` | Pas de jeton, ou jeton expiré. |
+| `403` | Connecté, mais pas le droit (rôle, quota, limite d'un template). |
+| `404` | La ressource n'existe pas, **ou l'appelant n'a aucun droit dessus** : on ne révèle pas son existence. |
+| `409` | Conflit : nom déjà pris, VM allumée, build déjà en cours… |
+| `429` | Trop d'essais de connexion. |
+| `501` | Opération non prise en charge par le pilote libvirt. |
+| `502` | L'hyperviseur (libvirt) n'a pas répondu ou a renvoyé une erreur. |
+
+Les erreurs ont toujours la même forme :
+
+```json
+{"status": "error", "content": "Template not found"}
+```
+
+### Tâches en arrière-plan
+
+Les opérations longues (cloner une VM, créer une VM depuis un template) répondent `202`
+avec une tâche, et l'en-tête `Location: /api/jobs/{job_id}` :
+
+```json
+{"id": "6f1c…", "kind": "clone", "status": "running", "result": null, "error": null}
+```
+
+`GET /api/jobs/{job_id}` donne son état : `running`, puis `succeeded` (la VM créée dans
+`result`) ou `failed` (le message dans `error`). Les tâches sont gardées en mémoire : elles
+disparaissent au redémarrage de l'API. Chacun ne voit que les siennes, un admin les voit
+toutes.
+
+## Santé
 
 | Route | Qui | Rôle |
 |---|---|---|
-| `POST /api/auth/login` | public | Connexion JSON `{"username","password"}` → `access_token`, `refresh_token`, `expires_in` |
-| `POST /api/auth/token` | public | Même chose en formulaire OAuth2 (`grant_type=password` ou `refresh_token`) |
-| `POST /api/auth/refresh` | public | `{"refresh_token"}` → nouvelle paire (le refresh token est à usage unique) |
-| `POST /api/auth/logout` | public | `{"refresh_token"}` : révoque la session |
-| `POST /api/auth/register` | public | Crée un compte `user`, seulement si les inscriptions sont ouvertes (`403` sinon) |
-| `GET /api/auth/config` | public | `{"registration_open": bool}` |
-| `GET /api/me` | connecté | Compte, quota et usage |
-| `PUT /api/me/password` | connecté | `{"current_password","new_password"}` |
-| `GET/POST /api/users` | admin | Liste / création (`{"username","password","role"}`) |
-| `GET/PATCH/DELETE /api/users/{user_id}` | admin | Lecture / `{"role","disabled"}` / suppression (`409` s'il possède des VM) |
-| `PUT /api/users/{user_id}/password` | admin | Réinitialise le mot de passe `{"new_password"}` |
-| `PUT /api/users/{user_id}/quota` | admin | `{"max_vms","max_vcpus","max_memory_mb","max_disk_gb"}`, `null` = illimité |
-| `GET/PUT /api/settings` | admin | `{"registration_open": bool}` |
-| `GET /api/audit` | admin | Journal, filtres `user_id`, `action`, `limit`, `offset` |
+| `GET /ping` | tout le monde | `{"status":"ok","content":"pong"}` : l'API répond. |
 
-Les erreurs ont toujours la forme `{"status":"error","content":"..."}`.
+## Authentification et compte
 
-## Stockage
+| Route | Qui | Rôle |
+|---|---|---|
+| `POST /api/auth/login` | public | Connexion : `{"username","password"}` → `access_token`, `refresh_token`, `expires_in`, `token_type`. |
+| `POST /api/auth/token` | public | La même chose au format OAuth2 (formulaire `grant_type=password` ou `refresh_token`), utilisé par Swagger. |
+| `POST /api/auth/refresh` | public | `{"refresh_token"}` → une nouvelle paire de jetons. L'ancien refresh token ne marche plus. |
+| `POST /api/auth/logout` | public | `{"refresh_token"}` : ferme la session. |
+| `POST /api/auth/register` | public | Crée un compte `user` (`{"username","password"}`), seulement si l'inscription libre est ouverte (`403` sinon). |
+| `GET /api/auth/config` | public | `{"registration_open": bool}`, pour afficher ou non « S'inscrire ». |
+| `GET /api/me` | connecté | Mon compte : rôle, quota et usage actuel (VM, processeurs, mémoire, disque). |
+| `PUT /api/me/password` | connecté | `{"current_password","new_password"}` (8 caractères minimum). |
+| `GET /api/me/groups` | connecté | Les groupes dont je fais partie, directement ou par un sous-groupe (`direct`). Lecture seule. |
 
-PostgreSQL (schéma dans `migrations/`) stocke les hyperviseurs, les comptes, les sessions, les droits d'accès aux hyperviseurs, le propriétaire de chaque VM (par UUID libvirt), les prêts de VM, les jetons noVNC et le journal d'audit.
+Un compte est bloqué 15 minutes après 5 mots de passe faux (`429`).
 
-Les VM, disques et réseaux eux-mêmes ne sont pas stockés dans la base : libvirt reste leur source de vérité.
+## Utilisateurs (admin)
 
-## Sante
+| Route | Rôle |
+|---|---|
+| `GET /api/users` | Tous les comptes, avec quota et usage. |
+| `POST /api/users` | Crée un compte : `{"username","password","role"}` (`role` : `user` par défaut, ou `admin`). `409` si le nom existe, sans tenir compte de la casse. |
+| `GET /api/users/{user_id}` | Un compte. |
+| `PATCH /api/users/{user_id}` | `{"role"}` et/ou `{"disabled": true}`. Le dernier admin actif ne peut être ni rétrogradé ni désactivé (`409`). |
+| `DELETE /api/users/{user_id}` | Supprime le compte. `409` s'il possède encore des VM, ou si c'est le dernier admin. |
+| `PUT /api/users/{user_id}/password` | Réinitialise le mot de passe : `{"new_password"}`. |
+| `PUT /api/users/{user_id}/quota` | `{"max_vms","max_vcpus","max_memory_mb","max_disk_gb"}` ; `null` = illimité. |
+| `GET /api/users/{user_id}/groups` | Les groupes d'un utilisateur. |
+| `GET /api/settings`, `PUT /api/settings` | `{"registration_open": bool}` : ouvre ou ferme l'inscription libre. |
+| `GET /api/audit` | Journal : qui a fait quoi. Filtres `?user_id=`, `?action=`, pagination `?limit=&offset=`. |
 
-### `GET /ping`
+## Groupes (admin)
 
-Reponse `200` :
+Un groupe contient des utilisateurs et d'autres groupes (sous-groupes, sans limite de
+profondeur). Un utilisateur peut être dans plusieurs groupes. Les groupes servent à donner
+des droits sur les templates. Un utilisateur voit seulement les siens (`GET /api/me/groups`).
 
-```json
-{"status":"ok","content":"pong"}
-```
+| Route | Rôle |
+|---|---|
+| `GET /api/groups` | Tous les groupes, avec leur nombre de membres et de sous-groupes directs. |
+| `POST /api/groups` | `{"name","description"}`. Nom unique, sans tenir compte de la casse (`409`). |
+| `GET /api/groups/{group_id}` | Le groupe, ses membres directs, ses sous-groupes et les groupes qui le contiennent. |
+| `PATCH /api/groups/{group_id}` | `{"name"}` et/ou `{"description"}`. |
+| `DELETE /api/groups/{group_id}` | Supprime le groupe ; ses membres et sous-groupes sont gardés. |
+| `GET /api/groups/{group_id}/members` | Tous les membres, sous-groupes compris (`direct: false` pour ceux qui n'y sont que par un sous-groupe). |
+| `PUT` / `DELETE /api/groups/{group_id}/members/{user_id}` | Ajoute / retire un utilisateur. |
+| `PUT` / `DELETE /api/groups/{group_id}/subgroups/{child_id}` | Met un groupe dans un autre / l'en retire. `409` si cela mettait un groupe dans lui-même. |
 
 ## Hyperviseurs
 
-Ajouter, modifier et supprimer un hyperviseur est réservé aux admins. Les autres utilisateurs ne voient que les hyperviseurs auxquels un admin leur a donné accès ou qui hébergent l'une de leurs VM (le champ `uri` leur est renvoyé vide).
+| Route | Qui | Rôle |
+|---|---|---|
+| `GET /api/hypervisors` | connecté | Les hyperviseurs visibles : tous pour un admin ; pour un utilisateur, ceux auxquels il a accès ou qui hébergent une de ses VM (sans `uri`). Le statut est revérifié auprès de libvirt. |
+| `POST /api/hypervisors` | admin | `{"name","uri"}`, par exemple `qemu:///system` ou `qemu+ssh://root@192.168.1.10/system`. La connexion est testée (`502` si elle échoue). |
+| `GET /api/hypervisors/{id}` | connecté | Un hyperviseur. |
+| `PATCH /api/hypervisors/{id}` | admin | `{"name"}` et/ou `{"uri"}` (connexion retestée). |
+| `DELETE /api/hypervisors/{id}` | admin | Retire l'hyperviseur de l'API. Rien n'est supprimé sur la machine. |
+| `GET /api/hypervisors/{id}/access` | admin | Les utilisateurs qui peuvent créer des VM dessus. |
+| `PUT` / `DELETE /api/hypervisors/{id}/access/{user_id}` | admin | Donne / retire ce droit. Les VM déjà créées restent à leur propriétaire. |
 
-### `GET /api/hypervisors`
+## Machines virtuelles
 
-Liste les hyperviseurs visibles par l'appelant. Le statut est revalide aupres de libvirt.
+Préfixe : `/api/hypervisors/{hypervisor_id}`. `vm_id` est l'UUID libvirt de la VM.
 
-### `GET /api/hypervisors/{id}/access`, `PUT|DELETE /api/hypervisors/{id}/access/{user_id}`
+Un utilisateur ne voit que ses VM et celles qu'on lui prête ; un admin voit tout. Chaque VM
+porte `owner` (son propriétaire, `null` si elle a été créée hors de l'API) et `access`
+(`admin`, `owner` ou `shared`).
 
-Admin. Liste, donne ou retire le droit de **créer des VM** sur cet hyperviseur. Retirer ce droit n'enlève pas les VM déjà possédées (`204`, `404`).
+| Route | Qui | Rôle |
+|---|---|---|
+| `GET …/vms` | connecté | Les VM visibles, avec état, mémoire et processeurs. |
+| `GET …/vm-options` | accès à l'hyperviseur | Ce qu'on peut choisir pour créer une VM : pools et leurs volumes (disques, ISO, `used_by`), réseaux, firmwares, limites, valeurs par défaut. |
+| `POST …/vms` | accès à l'hyperviseur | Crée une VM (voir ci-dessous). `201`. Un admin peut ajouter `"owner_id"` pour la créer au nom de quelqu'un. `403` si le quota est dépassé. |
+| `GET …/vms/{vm_id}` | propriétaire, emprunteur, admin | Une VM. |
+| `POST …/vms/{vm_id}/start` | propriétaire, emprunteur, admin | Démarre la VM. `409` si elle tourne déjà. |
+| `POST …/vms/{vm_id}/stop` | propriétaire, emprunteur, admin | Arrêt propre (ACPI) ; `?force=true` coupe tout de suite. |
+| `POST …/vms/{vm_id}/clone` | propriétaire, admin | `{"name"}` : copie une VM **arrêtée** (disques copiés, nouvel UUID, nouvelle MAC). `202` + tâche. |
+| `DELETE …/vms/{vm_id}` | propriétaire, admin | Supprime une VM arrêtée (`409` sinon) en gardant ses disques ; `?delete_disks=true` les supprime aussi (sauf s'ils servent à une autre VM). |
+| `GET …/vms/{vm_id}/vnc` | propriétaire, emprunteur, admin | Ouvre la console (voir [Console](#console-vnc)). |
 
-### `POST /api/hypervisors`
-
-Ajoute un hyperviseur dans la base après verification de sa connexion libvirt.
-
-```json
-{
-  "name": "kvm-local",
-  "uri": "qemu:///system"
-}
-```
-
-Reponses : `201` si cree, `502` si libvirt est inaccessible.
-
-### `GET /api/hypervisors/{id}`
-
-Retourne un hyperviseur et son statut courant.
-
-### `PATCH /api/hypervisors/{id}`
-
-Modifie le nom ou l'URI, puis met à jour la base.
-
-```json
-{"name":"kvm-production"}
-```
-
-```json
-{"uri":"qemu+ssh://admin@serveur/system"}
-```
-
-Reponses : `200`, `404`, `502`.
-
-### `DELETE /api/hypervisors/{id}`
-
-Supprime uniquement l'enregistrement de la base. Cette route ne supprime pas l'hote KVM.
-
-Reponses : `204` ou `404`.
-
-## VM
-
-Un utilisateur ne voit que ses VM et celles qu'on lui prête ; un admin voit tout. Chaque VM renvoyée porte `owner` (nom du propriétaire, `null` si elle a été créée hors de l'API) et `access` (`admin`, `owner` ou `shared`). Créer une VM exige l'accès à l'hyperviseur ; un admin peut ajouter `"owner_id"` au corps pour la créer au nom d'un utilisateur. Cloner et supprimer sont réservés au propriétaire et aux admins ; démarrer, arrêter et la console sont ouverts aux emprunteurs. Un dépassement de quota donne `403`.
-
-### Prêt et propriétaire
-
-- `GET|POST /api/hypervisors/{h}/vms/{vm}/shares` : liste / prête la VM (`{"username","expires_at"?}`), propriétaire ou admin.
-- `DELETE /api/hypervisors/{h}/vms/{vm}/shares/{user_id}` : retire un prêt (propriétaire, admin, ou l'emprunteur lui-même).
-- `PUT /api/hypervisors/{h}/vms/{vm}/owner` : `{"owner_id"}`, admin. Donne une VM à un utilisateur, y compris une VM créée hors de l'API.
-
-Les routes VM ne stockent rien dans la base (hors propriétaires et prêts). `GET .../vms` et `GET .../vms/{vm_id}` lisent libvirt (`vm_id` = UUID libvirt, erreurs 400, 404 et 502). `POST .../start` et `POST .../stop` agissent sur libvirt et renvoient la VM (200) ou 409 si l'etat ne le permet pas. `stop` envoie un arret ACPI asynchrone (l'etat renvoye peut encore etre `running`) ; `?force=true` coupe immediatement l'alimentation. `POST .../clone` (corps `{"name": "..."}`) est asynchrone : il repond `202` avec un job (`Location: /api/jobs/{id}`). La VM source doit etre arretee ; ses disques sont copies dans leur pool de stockage et la copie est une VM arretee avec un nouvel UUID et une nouvelle MAC. `GET /api/jobs/{job_id}` donne le statut (`running`, `succeeded` avec `result`, `failed` avec `error`) ; les jobs sont en memoire et perdus au redemarrage. `DELETE .../vms/{vm_id}` supprime une VM arretee (204 ; 409 si elle tourne) en conservant ses fichiers disque ; `?delete_disks=true` supprime aussi les volumes, sauf s'ils sont partages avec une autre VM ou hors pool (409, rien n'est supprime). `GET .../vm-options` donne ce qu'une interface peut proposer pour creer une VM : pools de stockage actifs avec leurs volumes (`kind` = `disk` ou `iso`, `used_by` = VM qui utilisent deja le disque), reseaux actifs, firmwares, bornes (`limits`) et valeurs par defaut (`defaults`), lus en direct dans libvirt. Seuls les fichiers reconnus comme image de disque (qcow2, vmdk..., ou `.img`/`.raw`) ou comme ISO sont listes : archives, scripts et autres fichiers d'un pool sont ignores. `POST .../vms` cree une VM (201, arretee sauf `"start": true`) a partir de ce que propose `vm-options` : voir ci-dessous.
-
-```text
-GET    /api/hypervisors/{hypervisor_id}/vms
-POST   /api/hypervisors/{hypervisor_id}/vms
-GET    /api/hypervisors/{hypervisor_id}/vms/{vm_id}
-GET    /api/hypervisors/{hypervisor_id}/vm-options
-POST   /api/hypervisors/{hypervisor_id}/vms/{vm_id}/start
-POST   /api/hypervisors/{hypervisor_id}/vms/{vm_id}/stop
-POST   /api/hypervisors/{hypervisor_id}/vms/{vm_id}/clone
-GET    /api/jobs/{job_id}
-DELETE /api/hypervisors/{hypervisor_id}/vms/{vm_id}
-```
-
-Corps de la creation (`POST /api/hypervisors/{hypervisor_id}/vms`) :
+Corps de `POST …/vms` :
 
 ```json
 {
@@ -126,120 +164,115 @@ Corps de la creation (`POST /api/hypervisors/{hypervisor_id}/vms`) :
   "memory_mb": 2048,
   "vcpus": 2,
   "disks": [
-    { "pool": "datastore", "size_gb": 20 },
-    { "pool": "datastore", "volume": "data.qcow2" }
+    { "pool": "default", "size_gb": 20 },
+    { "pool": "default", "volume": "data.qcow2" }
   ],
-  "iso": { "pool": "Téléchargements", "volume": "debian.iso" },
+  "iso": { "pool": "isos", "volume": "debian-13.iso" },
   "network": "default",
   "firmware": "bios",
   "start": false
 }
 ```
 
-- Obligatoires : `name`, `memory_mb`, `vcpus`, et au moins un disque ou une ISO. Defauts : `network` = `default`, `firmware` = `bios` (ou `uefi`), `start` = `false`.
-- Chaque disque est soit **neuf** (`size_gb` : volume qcow2 fin `<nom>.qcow2`, puis `<nom>-disk1.qcow2`...), soit **existant** (`volume`, qui ne doit etre utilise par aucune autre VM).
-- Les pools, volumes et reseaux sont designes par leur nom, jamais par un chemin : l'API ne peut pas rattacher un fichier arbitraire de l'hote.
-- Tout est verifie avant de creer quoi que ce soit ; si la definition echoue, les disques crees sont supprimes. Les disques existants ne sont jamais supprimes.
-- La VM utilise q35, virtio (disque, reseau, video), un affichage **VNC** (necessaire a la route `/vnc`) qui ecoute sur l'adresse de la variable d'environnement `VNC_LISTEN` (defaut `0.0.0.0`, car le proxy noVNC tourne sur la machine de l'API : a restreindre par pare-feu ou en donnant l'IP du reseau de l'hyperviseur), et une ISO bootee en premier si elle est fournie.
-- Erreurs : 400 (valeurs invalides, volume qui n'est pas du bon type), 404 (hyperviseur, pool, volume ou reseau inconnu), 409 (nom de VM ou de volume deja pris, disque deja utilise, pool ou reseau inactif), 502.
-- Limites : la creation est synchrone ; un disque est toujours cree en qcow2.
+- Obligatoires : `name`, `memory_mb`, `vcpus`, et au moins un disque ou une ISO.
+- Par défaut : `network` = `default`, `firmware` = `bios` (ou `uefi`), `start` = `false`.
+- Un disque est soit **neuf** (`size_gb` : un volume qcow2 créé pour l'occasion), soit
+  **existant** (`volume`, qui ne doit servir à aucune autre VM).
+- Pools, volumes et réseaux sont désignés par leur nom, jamais par un chemin.
+- Tout est vérifié avant de créer quoi que ce soit ; en cas d'échec, les disques créés sont
+  supprimés.
 
-## Disques
+### Prêt et propriétaire
 
-Les routes disques, pools et réseaux sont réservées aux admins (`403` sinon).
+| Route | Qui | Rôle |
+|---|---|---|
+| `GET …/vms/{vm_id}/shares` | propriétaire, admin | Les personnes à qui la VM est prêtée. |
+| `POST …/vms/{vm_id}/shares` | propriétaire, admin | `{"username","expires_at"}` (`expires_at` facultatif, en secondes Unix) : prête la VM (console, démarrage, arrêt). |
+| `DELETE …/vms/{vm_id}/shares/{user_id}` | propriétaire, admin, l'emprunteur | Retire le prêt. |
+| `PUT …/vms/{vm_id}/owner` | admin | `{"owner_id"}` : donne la VM à un autre utilisateur (y compris une VM créée hors de l'API). |
 
-Les disques et les pools sont geres directement par libvirt, sans stockage dans la base.
+## Stockage et réseaux (admin)
 
-```text
-GET    /api/hypervisors/{hypervisor_id}/disks
-POST   /api/hypervisors/{hypervisor_id}/disks
-GET    /api/hypervisors/{hypervisor_id}/disks/{disk_id}
-PATCH  /api/hypervisors/{hypervisor_id}/disks/{disk_id}
-DELETE /api/hypervisors/{hypervisor_id}/disks/{disk_id}
-```
+Préfixe : `/api/hypervisors/{hypervisor_id}`. Tout est lu et modifié directement dans
+libvirt.
 
-`GET .../disks/{disk_id}` lit un volume libvirt a partir de sa cle (`disk_id`) et renvoie un `Disk` (200), 404 si le volume est absent, ou 502 en cas d'erreur libvirt.
+| Route | Rôle |
+|---|---|
+| `GET …/disks` | Les volumes de tous les pools. |
+| `POST …/disks` | `{"name","size_gb","format"}` (par exemple `qcow2`). |
+| `GET …/disks/{disk_id}` | Un volume, par sa clé libvirt. |
+| `PATCH …/disks/{disk_id}` | `{"size_gb"}` : agrandit le volume. Réduire est refusé (`400`). |
+| `DELETE …/disks/{disk_id}` | Supprime le volume **et ses données**. |
+| `GET …/pools` | Les pools de stockage. |
+| `POST …/pools` | `{"name","target_path"}` : crée, construit et démarre un pool de type répertoire. |
+| `GET …/networks` | Les réseaux virtuels, actifs ou non. |
+| `POST …/networks` | `{"name","bridge"}` (`bridge` facultatif) : crée et démarre un réseau isolé. |
 
-`PATCH .../disks/{disk_id}` accepte `{"size_gb":40}` et redimensionne le volume (200 avec le `Disk` mis a jour). La reduction de capacite est refusee (400) pour eviter une perte de donnees ; le nom et le format ne sont pas modifiables par cette route. Un pilote qui ne prend pas en charge cette operation renvoie `501`, notamment le pilote de test `test:///default`.
+## Templates
 
-`DELETE .../disks/{disk_id}` supprime le volume libvirt identifie par sa cle et renvoie `204` sans corps. La route renvoie `404` si le volume est absent, `501` si le pilote ne prend pas en charge la suppression, ou `502` en cas d'autre erreur libvirt. Cette operation supprime les donnees du volume.
+Préfixe : `/api/hypervisors/{hypervisor_id}/templates`. Un template est une image de VM
+construite par **Packer** sur l'hyperviseur. Chaque construction donne une **version**
+numérotée ; on crée les VM depuis la dernière version construite.
 
-Corps prevu :
+Qui peut quoi :
 
-```json
-{
-  "name": "vm-test-disk",
-  "size_gb": 20,
-  "format": "qcow2"
-}
-```
+- **admin** : tout, y compris créer et supprimer un template, changer sa visibilité et
+  donner les droits ;
+- droit **`manage`** : modifier, reconstruire, arrêter un build, lire les logs, voir tous
+  les builds avec leur configuration, supprimer une version ;
+- droit **`use`** : voir le template et ses versions construites, créer des VM.
 
-### Pools de stockage
+Un template `hypervisor` (par défaut) est aussi utilisable par tous ceux qui ont accès à
+l'hyperviseur ; un template `restricted`, seulement grâce aux droits. Chaque template
+renvoie `access` : `level` (`use`, `manage`, `admin`), `max_vms` et `vm_count`.
 
-Les pools sont rattaches a un hyperviseur et listes/crees via libvirt. La creation definit un pool de type `dir`, construit le repertoire cible et demarre le pool.
+| Route | Qui | Rôle |
+|---|---|---|
+| `GET …/templates` | connecté | Les templates sur lesquels j'ai un droit. |
+| `POST …/templates` | admin | `{"name","packer_config","disk_name","pool","visibility","allow_vm_creation"}`. Lance le build de la version 1 : `202`. |
+| `GET …/templates/{template_id}` | droit | Le template, sa dernière version, mon niveau d'accès. |
+| `PATCH …/templates/{template_id}` | `manage` (visibilité : admin) | Modifie la définition ; s'applique au prochain build. |
+| `DELETE …/templates/{template_id}` | admin | Supprime le template, ses versions et leurs disques (`409` pendant un build). Les VM déjà créées gardent leur copie. |
+| `GET …/{template_id}/versions` | droit | Les versions (seulement celles construites pour un droit `use`). |
+| `POST …/{template_id}/versions` | `manage` | Reconstruit : nouvelle version, `202`. `409` si un build tourne déjà. |
+| `GET …/{template_id}/versions/{version}` | droit | Une version. |
+| `DELETE …/{template_id}/versions/{version}` | `manage` | Supprime la version et son disque. |
+| `GET …/{template_id}/versions/{version}/logs` | `manage` | La sortie du build, en direct : rappeler avec `?offset=<next_offset>` pour n'avoir que la suite. |
+| `POST …/{template_id}/stop` | `manage` | Arrête le build en cours (Packer nettoie) ; `?force=true` le tue tout de suite. |
+| `POST …/{template_id}/vms` | droit | Crée une VM : `{"name","memory_mb","vcpus","version","network","firmware","start"}`. `202` + tâche. `403` si le quota ou `max_vms` est atteint. |
+| `GET …/{template_id}/permissions` | admin | Les droits donnés (utilisateurs, puis groupes), avec le nombre de VM de chacun. |
+| `PUT` / `DELETE …/{template_id}/permissions/users/{user_id}` | admin | Donne (ou change) / retire le droit d'un utilisateur : `{"role": "use" \| "manage", "max_vms": 2}`. |
+| `PUT` / `DELETE …/{template_id}/permissions/groups/{group_id}` | admin | Pareil pour un groupe, et donc pour tous ses membres, sous-groupes compris. |
 
-```text
-GET  /api/hypervisors/{hypervisor_id}/pools
-POST /api/hypervisors/{hypervisor_id}/pools
-```
+`max_vms` est le nombre de VM issues du template que **chaque** personne peut posséder
+(`null` = illimité). Quand plusieurs droits s'appliquent (le sien, ceux de ses groupes), le
+plus généreux l'emporte. Les admins ne sont pas limités.
 
-Corps de creation :
+## Console (VNC)
 
-```json
-{
-  "name": "default",
-  "target_path": "/tmp/libvirt-pools/default"
-}
-```
-
-La reponse de pool contient son UUID `id`, son `hypervisor_id`, son `name` et son etat `active`.
-
-## Reseaux
-
-Les réseaux sont lus et créés directement dans libvirt, sans stockage dans la base. La liste renvoie les réseaux actifs ou inactifs de l’hyperviseur. La création définit puis démarre un réseau isolé ; le champ `bridge` est facultatif.
-
-```text
-GET  /api/hypervisors/{hypervisor_id}/networks
-POST /api/hypervisors/{hypervisor_id}/networks
-```
-
-Corps prevu :
-
-```json
-{
-  "name": "reseau-test"
-}
-```
-
-La création peut aussi préciser un nom de bridge, par exemple `"bridge":"virbr10"`. La réponse contient l’UUID `id`, le `hypervisor_id`, le nom, le bridge éventuel et le statut (`active` ou `inactive`).
-
-## VNC
-
-### `GET /api/hypervisors/{hypervisor_id}/vms/{vm_id}/vnc`
-
-Propriétaire, emprunteur ou admin. Crée un jeton noVNC aléatoire qui expire (2 minutes par défaut), l'écrit dans le fichier lu par websockify et renvoie :
+`GET /api/hypervisors/{hypervisor_id}/vms/{vm_id}/vnc` (propriétaire, emprunteur ou admin)
+crée un jeton aléatoire valable 2 minutes et renvoie l'adresse de la console :
 
 ```json
 {
-  "hypervisor_id": "...", "vm_id": "...", "uuid": "...",
-  "host": "kvm1.example", "port": "5900",
-  "token": "9f2c...", "novnc_url": "http://localhost:6080/vnc.html?path=websockify/?token=9f2c...&autoconnect=true",
+  "hypervisor_id": "…", "vm_id": "…", "uuid": "…",
+  "host": "192.168.1.10", "port": "5900",
+  "token": "9f2c…",
+  "novnc_url": "https://<serveur>:6443/vnc.html?path=websockify/?token=9f2c…&autoconnect=true",
   "status": "connected", "expires_at": 1792706543
 }
 ```
 
-Reponses : `200`, `404` (VM inconnue ou sans droit, ou pas de port VNC), `409` (port pas encore attribué : la VM est arrêtée).
+Il suffit d'ouvrir `novnc_url` dans le navigateur. `409` si la VM est arrêtée (pas encore
+de port VNC).
 
-## Documentation interactive
+## Tâches
 
-Swagger UI :
+| Route | Qui | Rôle |
+|---|---|---|
+| `GET /api/jobs/{job_id}` | celui qui l'a lancée, admin | État d'une tâche (voir [Tâches en arrière-plan](#tâches-en-arrière-plan)). |
 
-```text
-http://127.0.0.1:3000/swagger-ui/
-```
+## Pour essayer
 
-OpenAPI JSON :
-
-```text
-http://127.0.0.1:3000/api-docs/openapi.json
-```
+- **Swagger** : `/swagger-ui/`, bouton **Authorize** pour se connecter.
+- **Bruno** : une requête prête pour chaque route dans `docs/bruno/` (voir [BRUNO.md](BRUNO.md)).

@@ -17,7 +17,8 @@ Les deux tournent dans Docker, chacun derrière son HAProxy en HTTPS.
 - **Installer en quelques commandes** : [DEPLOY.md](DEPLOY.md).
 - **Installation détaillée** (développement ou Docker) : [INSTALLATION.md](INSTALLATION.md).
 - **Architecture Docker** (conteneurs, ports, réseaux, schémas) : [docs/DOCKER.md](docs/DOCKER.md).
-- **Référence de l'API** : Swagger sur `/swagger-ui/`, et [docs/API.md](docs/API.md).
+- **Fonctionnement et organisation du dépôt** : [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+- **Appels de l'API** : [docs/API.md](docs/API.md), et Swagger sur `/swagger-ui/`.
 - **Outils de développement** : [TOOLS.md](TOOLS.md).
 
 ## Fonctionnalités
