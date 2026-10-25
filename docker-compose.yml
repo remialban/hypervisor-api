@@ -1,3 +1,22 @@
+# Certificat (et chaîne) et clé privée, en PEM, dans deux fichiers, partagés par les deux
+# HAProxy. La clé doit être lisible par l'UID 99 (utilisateur de HAProxy dans le conteneur).
+# create_host_path: false : un chemin qui n'existe pas fait échouer le démarrage, au lieu que
+# Docker crée un dossier vide à sa place (HAProxy n'aurait alors aucun certificat).
+x-tls-cert: &tls-cert
+  type: bind
+  source: ${TLS_CERT_PATH:?TLS_CERT_PATH doit désigner le certificat PEM, voir docs/HAPROXY.md}
+  target: /usr/local/etc/haproxy/certs/site.pem
+  read_only: true
+  bind:
+    create_host_path: false
+x-tls-key: &tls-key
+  type: bind
+  source: ${TLS_KEY_PATH:?TLS_KEY_PATH doit désigner la clé privée PEM, voir docs/HAPROXY.md}
+  target: /usr/local/etc/haproxy/certs/site.pem.key
+  read_only: true
+  bind:
+    create_host_path: false
+
 services:
   api:
     image: ${DOCKERHUB_USERNAME:-remi}/hypervisor-api:${TAG:-latest}
@@ -6,7 +25,7 @@ services:
       dockerfile: Dockerfile
     container_name: hypervisor-api
     restart: unless-stopped
-    # Accès depuis l'extérieur : uniquement en HTTPS, par haproxy. Ce port n'est ouvert que
+    # Accès depuis l'extérieur : uniquement en HTTPS, par api-haproxy. Ce port n'est ouvert que
     # sur la machine elle-même (Bruno, curl en local) ; supprimer ces deux lignes pour le fermer.
     ports:
       - "127.0.0.1:${API_LOCAL_PORT:-3000}:3000"
@@ -15,8 +34,8 @@ services:
       DATABASE_URL: sqlite:///data/api.db?mode=rwc
       # Fichier de jetons noVNC, dans le volume partagé avec le conteneur noVNC (et lui seul).
       VM_CONFIG_PATH: /vnc/vm.cfg
-      # URL de noVNC vue par le navigateur, derrière haproxy.
-      NOVNC_URL: ${NOVNC_URL:-https://localhost/vnc.html}
+      # URL de noVNC vue par le navigateur : l'adresse HTTPS de novnc-haproxy.
+      NOVNC_URL: ${NOVNC_URL:-https://localhost:6443/vnc.html}
       SSH_PRIVATE_KEY_PATH: /run/secrets/ssh_private_key
       # Authentification. Le secret signe les JWT : 32 caractères minimum, à garder secret.
       JWT_SECRET: ${JWT_SECRET:?JWT_SECRET doit être défini (32 caractères minimum, voir .env.example)}
@@ -67,7 +86,7 @@ services:
       dockerfile: Dockerfile.novnc
     container_name: hypervisor-novnc
     restart: unless-stopped
-    # Pas de port publié : noVNC n'est joignable qu'à travers haproxy, en HTTPS.
+    # Pas de port publié : noVNC n'est joignable qu'à travers novnc-haproxy, en HTTPS.
     expose:
       - "6080"
     environment:
@@ -81,37 +100,46 @@ services:
     networks:
       - hypervisor-net
 
-  # Seule porte d'entrée : HTTPS pour l'API et noVNC, HTTP redirigé (voir docs/HAPROXY.md).
-  haproxy:
+  # Entrée HTTPS de l'API : Swagger, Bruno, scripts (voir docs/HAPROXY.md). Le front, lui,
+  # joint l'API par le réseau Docker. HTTP redirigé vers HTTPS.
+  api-haproxy:
     image: haproxy:3.0-alpine
-    container_name: hypervisor-haproxy
+    container_name: hypervisor-api-haproxy
     restart: unless-stopped
+    command: ["haproxy", "-f", "/usr/local/etc/haproxy/common.cfg", "-f", "/usr/local/etc/haproxy/api.cfg"]
     ports:
-      - "${HTTP_PORT:-80}:8080"
-      - "${HTTPS_PORT:-443}:8443"
+      - "${API_HTTP_PORT:-8081}:8080"
+      - "${API_HTTPS_PORT:-8443}:8443"
     environment:
       # Pour la redirection HTTP -> HTTPS.
-      HTTPS_PORT: ${HTTPS_PORT:-443}
+      HTTPS_PORT: ${API_HTTPS_PORT:-8443}
     volumes:
-      - ./haproxy/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
-      # Certificat (et chaîne) et clé privée, en PEM, dans deux fichiers. La clé doit être
-      # lisible par l'UID 99 (utilisateur de HAProxy dans le conteneur).
-      # create_host_path: false : un chemin qui n'existe pas fait échouer le démarrage, au
-      # lieu que Docker crée un dossier vide à sa place (HAProxy n'aurait alors aucun certificat).
-      - type: bind
-        source: ${TLS_CERT_PATH:?TLS_CERT_PATH doit désigner le certificat PEM, voir docs/HAPROXY.md}
-        target: /usr/local/etc/haproxy/certs/site.pem
-        read_only: true
-        bind:
-          create_host_path: false
-      - type: bind
-        source: ${TLS_KEY_PATH:?TLS_KEY_PATH doit désigner la clé privée PEM, voir docs/HAPROXY.md}
-        target: /usr/local/etc/haproxy/certs/site.pem.key
-        read_only: true
-        bind:
-          create_host_path: false
+      - ./haproxy/common.cfg:/usr/local/etc/haproxy/common.cfg:ro
+      - ./haproxy/api.cfg:/usr/local/etc/haproxy/api.cfg:ro
+      - *tls-cert
+      - *tls-key
     depends_on:
       - api
+    networks:
+      - hypervisor-net
+
+  # Entrée HTTPS des consoles : pages noVNC et WebSocket. C'est l'adresse de NOVNC_URL.
+  novnc-haproxy:
+    image: haproxy:3.0-alpine
+    container_name: hypervisor-novnc-haproxy
+    restart: unless-stopped
+    command: ["haproxy", "-f", "/usr/local/etc/haproxy/common.cfg", "-f", "/usr/local/etc/haproxy/novnc.cfg"]
+    ports:
+      - "${NOVNC_HTTP_PORT:-6081}:8080"
+      - "${NOVNC_HTTPS_PORT:-6443}:8443"
+    environment:
+      HTTPS_PORT: ${NOVNC_HTTPS_PORT:-6443}
+    volumes:
+      - ./haproxy/common.cfg:/usr/local/etc/haproxy/common.cfg:ro
+      - ./haproxy/novnc.cfg:/usr/local/etc/haproxy/novnc.cfg:ro
+      - *tls-cert
+      - *tls-key
+    depends_on:
       - novnc
     networks:
       - hypervisor-net

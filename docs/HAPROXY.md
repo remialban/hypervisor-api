@@ -1,17 +1,29 @@
 # HTTPS avec HAProxy
 
-Avec Docker Compose, l'API et noVNC ne sont joignables que par HAProxy, en HTTPS. HAProxy
-chiffre la connexion avec votre certificat, puis transmet chaque requête au bon conteneur :
+Avec Docker Compose, l'API et noVNC ne sont joignables qu'en HTTPS, chacun par **son propre
+HAProxy**. Chaque HAProxy chiffre la connexion avec votre certificat, puis transmet tout à
+son conteneur :
 
-| Chemin | Conteneur |
-|---|---|
-| `/api/…`, `/swagger-ui…`, `/api-docs/…`, `/ping` | `api` (port 3000) |
-| tout le reste : `/vnc.html`, `/websockify`, fichiers de noVNC | `novnc` (port 6080) |
+| Conteneur HAProxy | HTTP (redirigé) | HTTPS | Envoie vers |
+|---|---|---|---|
+| `hypervisor-api-haproxy` | `API_HTTP_PORT` (8081) | `API_HTTPS_PORT` (8443) | `api:3000` : API, Swagger, OpenAPI |
+| `hypervisor-novnc-haproxy` | `NOVNC_HTTP_PORT` (6081) | `NOVNC_HTTPS_PORT` (6443) | `novnc:6080` : pages noVNC et WebSocket des consoles |
 
-Les deux services partagent donc la même adresse, par exemple `https://kvm.example.com`.
-Le port HTTP ne sert qu'à rediriger vers HTTPS.
+Les ports 80 et 443 sont laissés au troisième HAProxy, celui du frontend (dépôt
+`hypervisor-ui`), qui sert l'application et relaie lui-même `/api` vers l'API par le réseau
+Docker. Le schéma d'ensemble est dans [DOCKER.md](DOCKER.md).
 
-La configuration est dans [haproxy/haproxy.cfg](../haproxy/haproxy.cfg).
+Le port HTTP de chaque HAProxy ne sert qu'à rediriger vers son port HTTPS.
+
+La configuration est découpée en trois fichiers :
+
+- [haproxy/common.cfg](../haproxy/common.cfg) : ce qui est commun (TLS, délais, DNS de
+  Docker, redirection HTTP → HTTPS) ;
+- [haproxy/api.cfg](../haproxy/api.cfg) : l'entrée de l'API ;
+- [haproxy/novnc.cfg](../haproxy/novnc.cfg) : l'entrée des consoles.
+
+Chaque conteneur charge `common.cfg` puis son propre fichier (`command:` dans
+`docker-compose.yml`). Les deux utilisent le même certificat.
 
 ## Ce que HAProxy apporte
 
@@ -21,13 +33,14 @@ La configuration est dans [haproxy/haproxy.cfg](../haproxy/haproxy.cfg).
 - **Ports fermés** : noVNC n'est plus publié du tout. L'API n'est publiée que sur
   `127.0.0.1:3000`, donc seulement pour la machine elle-même (Bruno, curl). Pour la fermer
   aussi, supprimez la section `ports` du service `api` dans `docker-compose.yml`.
-- **Limite sur l'authentification** : au plus 20 requêtes sur `/api/auth/…` toutes les 10
-  secondes par adresse IP, puis `429`. Cette limite s'ajoute à celle de l'API, qui bloque un
-  compte 15 minutes après 5 mots de passe faux.
+- **Limite sur l'authentification** (HAProxy de l'API) : au plus 20 requêtes sur
+  `/api/auth/…` toutes les 10 secondes par adresse IP, puis `429`. Cette limite s'ajoute à
+  celle de l'API, qui bloque un compte 15 minutes après 5 mots de passe faux. Le HAProxy du
+  frontend applique la même limite aux connexions faites par l'application.
 - **En-têtes de sécurité** :
   - `Strict-Transport-Security` : le navigateur n'utilisera plus que HTTPS pour ce site ;
-  - `Referrer-Policy: no-referrer` : l'URL noVNC, qui contient le jeton, n'est jamais
-    envoyée à un autre site ;
+  - `Referrer-Policy: no-referrer` (HAProxy de noVNC) : l'URL noVNC, qui contient le jeton,
+    n'est jamais envoyée à un autre site ;
   - `X-Content-Type-Options: nosniff`.
 - **Consoles longues** : une console WebSocket peut rester inactive jusqu'à une heure sans
   être coupée (`timeout tunnel`).
@@ -76,7 +89,7 @@ sudo install -o 99 -g 99 -m 400 /etc/letsencrypt/live/kvm.example.com/privkey.pe
   /etc/hypervisor-api/tls/key.pem
 sudo install -m 644 /etc/letsencrypt/live/kvm.example.com/fullchain.pem \
   /etc/hypervisor-api/tls/cert.pem
-docker compose restart haproxy
+docker compose restart api-haproxy novnc-haproxy
 ```
 
 ### Certificat auto-signé (tests uniquement)
@@ -93,8 +106,10 @@ Puis, dans `.env` : `TLS_CERT_PATH=./tls/cert.pem` et `TLS_KEY_PATH=./tls/key.pe
 dossier `tls/` est ignoré par git.
 
 Mettez dans `subjectAltName` le nom et/ou l'IP par lesquels les navigateurs joindront le
-serveur. Le navigateur affichera un avertissement qu'il faut accepter une fois ; l'API et
-noVNC ayant la même adresse, cela vaut pour les deux.
+serveur. Le navigateur affiche un avertissement **pour chaque port** (chaque port est une
+origine différente) : acceptez-le sur `https://serveur:6443` avant d'ouvrir une console,
+sinon la console reste vide. Importer `tls/cert.pem` comme autorité de confiance évite tous
+ces avertissements.
 
 ## Configuration `.env`
 
@@ -103,38 +118,42 @@ noVNC ayant la même adresse, cela vaut pour les deux.
 TLS_CERT_PATH=/etc/hypervisor-api/tls/cert.pem
 TLS_KEY_PATH=/etc/hypervisor-api/tls/key.pem
 
-# Ports publiés sur l'hôte (par défaut 80 et 443).
-HTTP_PORT=80
-HTTPS_PORT=443
+# Ports publiés sur l'hôte : HTTP (redirigé) et HTTPS de chaque HAProxy.
+# 80 et 443 sont laissés au frontend.
+API_HTTP_PORT=8081
+API_HTTPS_PORT=8443
+NOVNC_HTTP_PORT=6081
+NOVNC_HTTPS_PORT=6443
 
-# Adresse de noVNC vue par le navigateur : le nom du certificat, en https.
-NOVNC_URL=https://kvm.example.com/vnc.html
+# Adresse de noVNC vue par le navigateur : le HAProxy de noVNC, avec le nom du certificat.
+NOVNC_URL=https://kvm.example.com:6443/vnc.html
 ```
 
-`NOVNC_URL` doit être en `https://` et utiliser le nom du certificat. noVNC ouvre alors la
-console en `wss://` (WebSocket chiffré) sur la même adresse. Avec un port HTTPS autre que
-443, ajoutez-le : `https://kvm.example.com:8443/vnc.html`.
+`NOVNC_URL` doit être en `https://`, sur le port `NOVNC_HTTPS_PORT`, et utiliser le nom du
+certificat. noVNC ouvre alors la console en `wss://` (WebSocket chiffré) sur la même adresse.
 
-Si le front Angular est servi par la même adresse, laissez `CORS_ALLOWED_ORIGINS` vide.
-S'il est ailleurs, mettez son origine en `https://`.
+Le frontend appelle l'API par son propre nginx, sur sa propre origine : laissez
+`CORS_ALLOWED_ORIGINS` vide. Ne le remplissez (en `https://`) que pour un front servi
+ailleurs qui appellerait l'API directement sur le port 8443.
 
 ## Démarrage et vérification
 
 ```bash
-docker compose up --build -d
-curl https://kvm.example.com/ping          # {"status":"ok","content":"pong"}
-curl -I http://kvm.example.com/vnc.html    # 301 vers https://
+docker compose up --build -d --remove-orphans
+curl https://kvm.example.com:8443/ping              # {"status":"ok","content":"pong"}
+curl -I http://kvm.example.com:8081/ping            # 301 vers https://…:8443
+curl -o /dev/null -w '%{http_code}\n' https://kvm.example.com:6443/vnc.html   # 200
+curl -I http://kvm.example.com:6081/vnc.html        # 301 vers https://…:6443
 ```
 
 Avec un certificat auto-signé, ajoutez `--cacert tls/cert.pem` à curl.
 
-Swagger est sur `https://kvm.example.com/swagger-ui/`.
+Swagger est sur `https://kvm.example.com:8443/swagger-ui/`.
 
-Les logs de HAProxy (une ligne par requête, avec le conteneur choisi et le code de
-réponse) :
+Les logs (une ligne par requête, avec le conteneur joint et le code de réponse) :
 
 ```bash
-docker compose logs -f haproxy
+docker compose logs -f api-haproxy novnc-haproxy
 ```
 
 ## Problèmes courants
@@ -151,14 +170,17 @@ docker compose logs -f haproxy
   dossier du `docker-compose.yml`).
 - **`no SSL certificate specified for bind ':8443'`** : HAProxy n'a trouvé aucun certificat à
   l'endroit monté. Vérifiez que `TLS_CERT_PATH` désigne bien un fichier, pas un dossier.
-- **La console noVNC ne se connecte pas** : `NOVNC_URL` est encore en `http://` ou sur
-  l'ancien port 6080. Elle doit être l'adresse HTTPS de HAProxy.
+- **La console noVNC ne se connecte pas** : `NOVNC_URL` n'est pas l'adresse HTTPS du HAProxy
+  de noVNC (`https://…:6443/vnc.html`), ou le certificat n'a pas encore été accepté sur ce
+  port dans le navigateur.
+- **`port is already allocated`** au démarrage : un autre service (souvent le HAProxy du
+  frontend, sur 80 et 443) utilise déjà ce port. Changez `API_*_PORT` ou `NOVNC_*_PORT`.
 - **`429 Too Many Requests` sur `/api/auth/…`** : la limite de 20 requêtes / 10 s est
   atteinte. Attendez quelques secondes.
 
 ## Ce que HAProxy ne couvre pas
 
-HAProxy protège le trajet entre le navigateur et le serveur. Deux points restent à traiter
+Les HAProxy protègent le trajet entre le navigateur et le serveur. Deux points restent à traiter
 à part :
 
 - **Le port VNC des VM sur l'hyperviseur** : il est ouvert sur le réseau sans mot de passe.

@@ -154,16 +154,20 @@ Le détail de l'authentification (rôles, quotas, branchement du front) est dans
 
 ## Option 2 — Installation avec Docker
 
-Docker Compose lance trois conteneurs :
+Docker Compose lance quatre conteneurs :
 
 | Conteneur | Rôle | Accès |
 |---|---|---|
-| `haproxy` | Seule porte d'entrée, en HTTPS | ports `443` (HTTPS) et `80` (redirigé vers HTTPS) |
+| `api-haproxy` | Entrée HTTPS de l'API (Swagger, Bruno, scripts) | `8443` (HTTPS), `8081` (redirigé vers HTTPS) |
+| `novnc-haproxy` | Entrée HTTPS des consoles | `6443` (HTTPS), `6081` (redirigé vers HTTPS) |
 | `api` | L'API | `127.0.0.1:3000` seulement (outils locaux) |
-| `novnc` | noVNC et websockify | aucun port publié : uniquement via HAProxy |
+| `novnc` | noVNC et websockify | aucun port publié : uniquement via `novnc-haproxy` |
 
-HAProxy envoie `/api/…`, `/swagger-ui…`, `/api-docs/…` et `/ping` à l'API, et tout le reste
-(`/vnc.html`, `/websockify`) à noVNC. Le détail est dans [docs/HAPROXY.md](docs/HAPROXY.md).
+Les ports 80 et 443 sont laissés au frontend (`hypervisor-ui`), qui a son propre HAProxy et
+joint l'API par le réseau Docker. Le détail des HAProxy est dans
+[docs/HAPROXY.md](docs/HAPROXY.md).
+Le fonctionnement avec le frontend (`hypervisor-ui`), avec schémas des conteneurs, ports et
+réseaux, est dans [docs/DOCKER.md](docs/DOCKER.md).
 
 ### 1. Prérequis
 
@@ -176,8 +180,8 @@ HAProxy envoie `/api/…`, `/swagger-ui…`, `/api-docs/…` et `/ping` à l'API
 
 ### 2. Le certificat HTTPS
 
-HAProxy a besoin d'un certificat et de sa clé privée, en PEM, dans **deux fichiers**. La clé
-doit être lisible par l'UID 99 (l'utilisateur de HAProxy dans son conteneur).
+Les deux HAProxy partagent un certificat et sa clé privée, en PEM, dans **deux fichiers**.
+La clé doit être lisible par l'UID 99 (l'utilisateur de HAProxy dans son conteneur).
 
 **Pour un essai ou un réseau local**, un certificat auto-signé suffit. Mettez dans
 `subjectAltName` les noms et adresses par lesquels les navigateurs joindront le serveur :
@@ -218,19 +222,23 @@ SSH_PRIVATE_KEY_HOST_PATH=/home/<vous>/.ssh/id_ed25519
 # HTTPS
 TLS_CERT_PATH=./tls/cert.pem
 TLS_KEY_PATH=./tls/key.pem
-HTTP_PORT=80
-HTTPS_PORT=443
 
-# Adresse de noVNC vue par les navigateurs : celle du serveur, en https,
+# Ports publiés : 80 et 443 sont laissés au frontend
+API_HTTP_PORT=8081
+API_HTTPS_PORT=8443
+NOVNC_HTTP_PORT=6081
+NOVNC_HTTPS_PORT=6443
+
+# Adresse des consoles vue par les navigateurs : le HAProxy de noVNC (port 6443),
 # avec un nom ou une IP présent dans le certificat
-NOVNC_URL=https://192.168.1.10/vnc.html
+NOVNC_URL=https://192.168.1.10:6443/vnc.html
 
 # Secrets : à générer, jamais les valeurs d'exemple
 JWT_SECRET=<résultat de : openssl rand -base64 48>
 ADMIN_USERNAME=admin
 ADMIN_PASSWORD=<mot de passe du premier administrateur>
 
-# Front servi ailleurs que l'API (en https) ; vide s'il est servi par la même adresse
+# Vide : le frontend appelle l'API par son propre nginx, sur sa propre origine
 CORS_ALLOWED_ORIGINS=
 ```
 
@@ -244,36 +252,41 @@ docker compose up -d --build --remove-orphans
 docker compose ps
 ```
 
-Les trois conteneurs doivent être `Up`. `--build` construit les images de l'API et de noVNC
+Les quatre conteneurs doivent être `Up`. `--build` construit les images de l'API et de noVNC
 depuis le code ; sans lui, Compose peut prendre une image plus ancienne.
 
 ### 5. Vérifier
 
 ```bash
-curl --cacert tls/cert.pem https://localhost/ping        # {"status":"ok","content":"pong"}
-curl -I http://localhost/ping                            # 301 vers https://
+curl --cacert tls/cert.pem https://localhost:8443/ping            # {"status":"ok","content":"pong"}
+curl -I http://localhost:8081/ping                               # 301 vers https://…:8443
+curl --cacert tls/cert.pem -o /dev/null -w '%{http_code}\n' https://localhost:6443/vnc.html   # 200
 ```
 
 (`--cacert` n'est utile qu'avec le certificat auto-signé.)
 
 Dans le navigateur :
 
-- Swagger : `https://<serveur>/swagger-ui/` ;
-- consoles : la `novnc_url` renvoyée par `GET /api/hypervisors/{id}/vms/{vm_id}/vnc`.
+- Swagger : `https://<serveur>:8443/swagger-ui/` ;
+- consoles : la `novnc_url` renvoyée par `GET /api/hypervisors/{id}/vms/{vm_id}/vnc`
+  (`https://<serveur>:6443/vnc.html?…`) ;
+- l'application : `https://<serveur>`, une fois le frontend lancé (voir
+  [docs/DOCKER.md](docs/DOCKER.md#démarrer-arrêter)).
 
-Avec le certificat auto-signé, le navigateur affiche un avertissement : acceptez-le une fois,
-ou importez `tls/cert.pem` comme autorité de confiance.
+Avec le certificat auto-signé, le navigateur affiche un avertissement **sur chaque port** :
+acceptez-le sur 8443 et sur 6443 (sinon les consoles restent vides), ou importez
+`tls/cert.pem` comme autorité de confiance.
 
 Connectez-vous avec `POST /api/auth/login`, puis ajoutez vos hyperviseurs comme dans
 l'[option 1](#3-se-connecter-et-ajouter-un-hyperviseur), en remplaçant
-`http://127.0.0.1:3000` par `https://<serveur>`.
+`http://127.0.0.1:3000` par `https://<serveur>:8443`.
 
 ### 6. Exploitation
 
 ```bash
 docker compose logs -f              # tous les logs
-docker compose logs -f haproxy      # une ligne par requête : conteneur choisi, code
-docker compose restart haproxy      # après un changement de certificat
+docker compose logs -f api-haproxy novnc-haproxy   # une ligne par requête, avec le code
+docker compose restart api-haproxy novnc-haproxy   # après un changement de certificat
 docker compose down                 # arrêter (les données restent)
 ```
 
@@ -300,7 +313,8 @@ sur les hyperviseurs. Changer `JWT_SECRET` déconnecte tout le monde mais ne per
 | HAProxy : `unable to load SSL private key` | Clé chiffrée, illisible par l'UID 99, ou qui ne correspond pas au certificat (voir [docs/HAPROXY.md](docs/HAPROXY.md#problèmes-courants)). |
 | Logs de l'API : `Permission denied (publickey…)` vers un hyperviseur | La clé SSH n'est pas autorisée sur l'hyperviseur, ou `SSH_PRIVATE_KEY_HOST_PATH` est faux. |
 | Logs de l'API : `Host key verification failed` | L'hyperviseur n'est pas dans `~/.ssh/known_hosts` de la machine Docker : connectez-vous-y une fois en SSH. |
-| La console noVNC ne s'ouvre pas | `NOVNC_URL` est encore en `http://` ou sur le port 6080 : elle doit être l'adresse HTTPS de HAProxy. |
+| La console noVNC ne s'ouvre pas | `NOVNC_URL` n'est pas `https://<serveur>:6443/vnc.html`, ou le certificat n'a pas été accepté sur le port 6443. |
+| `port is already allocated` au démarrage | Un autre service utilise ce port (souvent le frontend, sur 80 / 443) : changez `API_*_PORT` ou `NOVNC_*_PORT`. |
 | `429 Too Many Requests` à la connexion | Trop d'essais : 20 requêtes / 10 s par IP (HAProxy), ou 5 mots de passe faux pour un compte (bloqué 15 minutes). |
 
 ---
@@ -343,6 +357,7 @@ Pour chaque hyperviseur distant, joint en `qemu+ssh://utilisateur@adresse/system
 
 ---
 
-Pour aller plus loin : [README.md](README.md) (vue d'ensemble), [docs/API.md](docs/API.md)
+Pour aller plus loin : [README.md](README.md) (vue d'ensemble), [docs/DOCKER.md](docs/DOCKER.md)
+(API et frontend dans Docker), [docs/API.md](docs/API.md)
 (routes), [docs/AUTH.md](docs/AUTH.md) (comptes et droits), [docs/HAPROXY.md](docs/HAPROXY.md)
 (HTTPS), [docs/BRUNO.md](docs/BRUNO.md) (collection de requêtes).
