@@ -6,12 +6,13 @@ son conteneur :
 
 | Conteneur HAProxy | HTTP (redirigé) | HTTPS | Envoie vers |
 |---|---|---|---|
-| `hypervisor-api-haproxy` | `API_HTTP_PORT` (8081) | `API_HTTPS_PORT` (8443) | `api:3000` : API, Swagger, OpenAPI |
+| `hypervisor-api-haproxy` | `API_HTTP_PORT` (8081) | `API_HTTPS_PORT` (8443), et `:8000` interne pour le front | `api:3000` : API, Swagger, OpenAPI |
 | `hypervisor-novnc-haproxy` | `NOVNC_HTTP_PORT` (6081) | `NOVNC_HTTPS_PORT` (6443) | `novnc:6080` : pages noVNC et WebSocket des consoles |
 
 Les ports 80 et 443 sont laissés au troisième HAProxy, celui du frontend (dépôt
-`hypervisor-ui`), qui sert l'application et relaie lui-même `/api` vers l'API par le réseau
-Docker. Le schéma d'ensemble est dans [DOCKER.md](DOCKER.md).
+`hypervisor-ui`), qui sert l'application. Son nginx relaie `/api` vers le HAProxy de
+l'API, sur une entrée HTTP interne (`api-haproxy:8000`, non publiée) : toutes les requêtes
+vers l'API passent donc par `hypervisor-api-haproxy`. Le schéma d'ensemble est dans [DOCKER.md](DOCKER.md).
 
 Le port HTTP de chaque HAProxy ne sert qu'à rediriger vers son port HTTPS.
 
@@ -36,7 +37,8 @@ Chaque conteneur charge `common.cfg` puis son propre fichier (`command:` dans
 - **Limite sur l'authentification** (HAProxy de l'API) : au plus 20 requêtes sur
   `/api/auth/…` toutes les 10 secondes par adresse IP, puis `429`. Cette limite s'ajoute à
   celle de l'API, qui bloque un compte 15 minutes après 5 mots de passe faux. Le HAProxy du
-  frontend applique la même limite aux connexions faites par l'application.
+  frontend applique la même limite ; les connexions faites par l'application passent par les
+  deux (nginx transmet l'adresse du navigateur au HAProxy de l'API).
 - **En-têtes de sécurité** :
   - `Strict-Transport-Security` : le navigateur n'utilisera plus que HTTPS pour ce site ;
   - `Referrer-Policy: no-referrer` (HAProxy de noVNC) : l'URL noVNC, qui contient le jeton,
@@ -132,7 +134,8 @@ NOVNC_URL=https://kvm.example.com:6443/vnc.html
 `NOVNC_URL` doit être en `https://`, sur le port `NOVNC_HTTPS_PORT`, et utiliser le nom du
 certificat. noVNC ouvre alors la console en `wss://` (WebSocket chiffré) sur la même adresse.
 
-Le frontend appelle l'API par son propre nginx, sur sa propre origine : laissez
+Le frontend appelle l'API par son propre nginx (qui relaie vers `api-haproxy:8000`), sur sa
+propre origine : laissez
 `CORS_ALLOWED_ORIGINS` vide. Ne le remplissez (en `https://`) que pour un front servi
 ailleurs qui appellerait l'API directement sur le port 8443.
 

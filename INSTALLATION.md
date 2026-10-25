@@ -164,7 +164,7 @@ Docker Compose lance quatre conteneurs :
 | `novnc` | noVNC et websockify | aucun port publié : uniquement via `novnc-haproxy` |
 
 Les ports 80 et 443 sont laissés au frontend (`hypervisor-ui`), qui a son propre HAProxy et
-joint l'API par le réseau Docker. Le détail des HAProxy est dans
+appelle l'API à travers `api-haproxy` (entrée interne `:8000`, sur le réseau Docker). Le détail des HAProxy est dans
 [docs/HAPROXY.md](docs/HAPROXY.md).
 Le fonctionnement avec le frontend (`hypervisor-ui`), avec schémas des conteneurs, ports et
 réseaux, est dans [docs/DOCKER.md](docs/DOCKER.md).
@@ -238,7 +238,7 @@ JWT_SECRET=<résultat de : openssl rand -base64 48>
 ADMIN_USERNAME=admin
 ADMIN_PASSWORD=<mot de passe du premier administrateur>
 
-# Vide : le frontend appelle l'API par son propre nginx, sur sa propre origine
+# Vide : le frontend appelle l'API par son propre nginx (→ api-haproxy:8000), sur sa propre origine
 CORS_ALLOWED_ORIGINS=
 ```
 

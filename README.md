@@ -156,7 +156,8 @@ Le Compose lance quatre conteneurs :
 - `novnc` : noVNC et websockify. Son port `6080` n'est pas publié du tout.
 
 Les ports 80 et 443 sont laissés au frontend (`hypervisor-ui`), qui a son propre HAProxy
-et joint l'API par le réseau Docker (voir [docs/DOCKER.md](docs/DOCKER.md)).
+et appelle l'API à travers `api-haproxy` (entrée interne `:8000`, sur le réseau Docker ;
+voir [docs/DOCKER.md](docs/DOCKER.md)).
 
 Le détail (certificat, en-têtes, limite sur l'authentification, dépannage) est dans
 [docs/HAPROXY.md](docs/HAPROXY.md).
