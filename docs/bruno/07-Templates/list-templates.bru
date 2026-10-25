@@ -16,6 +16,8 @@ assert {
 
 docs {
   Templates of the hypervisor. Needs a grant on it (admins have it everywhere).
-  Admins see every template with its packer_config and, when the build failed, its error.
-  Users only see the created ones, without packer_config nor error.
+  Admins see every template with its packer_config, and the state of its latest build.
+  Users only see the templates that have a built version and are open to them
+  (visibility "hypervisor", or "restricted" with an access entry), without packer_config.
+  default_version is the version used to create VMs when none is given (latest built one).
 }

@@ -24,22 +24,25 @@ assert {
 }
 
 script:post-response {
-  if (res.status === 202) { bru.setVar("templateId", res.body.id); }
+  if (res.status === 202) {
+    bru.setVar("templateId", res.body.id);
+    bru.setVar("templateVersionId", res.body.latest_version.version);
+  }
 }
 
 docs {
   Admin only: a Packer configuration runs commands on the build host.
-  Body: CreateTemplate {name, packer_config, disk_name, pool (default "default")}.
+  Body: CreateTemplate {name, packer_config, disk_name, pool (default "default"), visibility ("hypervisor" default, or "restricted")}.
   disk_name is the file name of the image Packer writes (vm_name of the qemu builder).
+
+  Creates the template and starts building its version 1. Returns 202 (Location: .../templates/{id});
+  latest_version.status goes pending -> in_progress -> created | failed | cancelled.
+  Follow the output live with "Get build logs", stop it with "Stop build".
 
   The example builds Debian 12 from the official cloud image: cloud-init (cd_content) creates
   the "packer" account Packer connects with over SSH; it is locked at the end of the build.
   Only this one file reaches Packer, so everything (cloud-init, scripts) must be inline.
-  The build host needs packer, qemu-system-x86_64, qemu-img, virsh, xorriso (for cd_content),
-  /dev/kvm and Internet access. Expect 3 to 10 minutes.
-
-  Asynchronous: returns 202 with the template in state "pending" (Location: .../templates/{id}).
-  Poll "Get template" until status is "created" or "failed" (error holds the end of the output).
   Packer runs on the hypervisor over SSH for a qemu+ssh:// URI, on the API host for a local URI.
-  The disk lands in the pool as template-<name>.qcow2.
+  The build host needs packer, qemu-system-x86_64, qemu-img, virsh, xorriso (for cd_content),
+  /dev/kvm and Internet access. Expect 3 to 10 minutes. Each version is stored as template-<name>-v<N>.qcow2.
 }

@@ -1,0 +1,20 @@
+meta {
+  name: Get version
+  type: http
+  seq: 7
+}
+
+get {
+  url: {{baseUrl}}{{apiPrefix}}/hypervisors/{{hypervisorId}}/templates/{{templateId}}/versions/{{templateVersionId}}
+  body: none
+  auth: inherit
+}
+
+assert {
+  res.status: eq 200
+}
+
+docs {
+  One version: status, volume, disk_size_gb, started_at and finished_at; for admins also the
+  configuration it was built from and, when it failed, the end of the output (error).
+}

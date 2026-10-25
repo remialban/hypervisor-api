@@ -1,0 +1,24 @@
+meta {
+  name: Rebuild template
+  type: http
+  seq: 5
+}
+
+post {
+  url: {{baseUrl}}{{apiPrefix}}/hypervisors/{{hypervisorId}}/templates/{{templateId}}/versions
+  body: none
+  auth: inherit
+}
+
+assert {
+  res.status: eq 202
+}
+
+script:post-response {
+  if (res.status === 202) { bru.setVar("templateVersionId", res.body.version); }
+}
+
+docs {
+  Admin only. Builds a new version (N+1) from the current definition, with its own disk.
+  Older versions stay usable. 409 if a build of this template is already running.
+}

@@ -10,15 +10,12 @@ get {
   auth: inherit
 }
 
-vars:pre-request {
-  hypervisorId: b24139f9-220d-4efa-b416-a14b54678ef0
-}
-
 assert {
   res.status: eq 200
 }
 
 docs {
-  One template and the state of its build: pending, in_progress, created or failed.
+  One template: its definition, its visibility, default_version and latest_version
+  (status: pending, in_progress, stopping, created, failed or cancelled).
   A build interrupted by a restart of the API is reported as failed.
 }

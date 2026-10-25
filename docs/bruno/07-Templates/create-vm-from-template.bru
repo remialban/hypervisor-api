@@ -1,7 +1,7 @@
 meta {
   name: Create VM from template
   type: http
-  seq: 5
+  seq: 16
 }
 
 post {
@@ -28,7 +28,8 @@ script:post-response {
 }
 
 docs {
-  Body: CreateVmFromTemplate {name, memory_mb, vcpus, network, firmware, start, owner_id (admin only)}.
+  Body: CreateVmFromTemplate {name, memory_mb, vcpus, version, network, firmware, start, owner_id (admin only)}.
+  version: a built version of the template (default: the latest built one, default_version).
   Needs a grant on the hypervisor and a created template; counts in the quota (the template disk size counts as disk_gb).
   Asynchronous: returns 202 with a Job (Location: /api/jobs/{id}), the disk is copied (<name>.qcow2, independent of the template).
   The caller (or owner_id) owns the new VM.

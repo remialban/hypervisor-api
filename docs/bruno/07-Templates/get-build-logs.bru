@@ -1,0 +1,25 @@
+meta {
+  name: Get build logs
+  type: http
+  seq: 8
+}
+
+get {
+  url: {{baseUrl}}{{apiPrefix}}/hypervisors/{{hypervisorId}}/templates/{{templateId}}/versions/{{templateVersionId}}/logs?offset=0
+  body: none
+  auth: inherit
+}
+
+params:query {
+  offset: 0
+}
+
+assert {
+  res.status: eq 200
+}
+
+docs {
+  Admin only (the output may show secrets). Packer output of the build, live while it runs.
+  To follow it, poll with offset = next_offset of the previous answer: only the new lines come back.
+  finished becomes true once the build ended. The log is capped at 2 MiB (truncated: true then).
+}

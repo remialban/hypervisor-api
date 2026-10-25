@@ -1,0 +1,24 @@
+meta {
+  name: Force stop build
+  type: http
+  seq: 10
+}
+
+post {
+  url: {{baseUrl}}{{apiPrefix}}/hypervisors/{{hypervisorId}}/templates/{{templateId}}/stop?force=true
+  body: none
+  auth: inherit
+}
+
+params:query {
+  force: true
+}
+
+assert {
+  res.status: eq 202
+}
+
+docs {
+  Admin only. Kills the running build at once (SIGKILL to all its processes) and removes its
+  work directory. Use it when a normal stop hangs. The version ends as cancelled.
+}

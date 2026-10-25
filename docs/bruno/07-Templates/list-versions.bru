@@ -1,0 +1,20 @@
+meta {
+  name: List versions
+  type: http
+  seq: 6
+}
+
+get {
+  url: {{baseUrl}}{{apiPrefix}}/hypervisors/{{hypervisorId}}/templates/{{templateId}}/versions
+  body: none
+  auth: inherit
+}
+
+assert {
+  res.status: eq 200
+}
+
+docs {
+  Versions of the template, newest first. Admins see every build (with packer_config and error),
+  users only the built ones.
+}

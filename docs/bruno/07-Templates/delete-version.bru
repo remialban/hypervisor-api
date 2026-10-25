@@ -1,0 +1,20 @@
+meta {
+  name: Delete version
+  type: http
+  seq: 11
+}
+
+delete {
+  url: {{baseUrl}}{{apiPrefix}}/hypervisors/{{hypervisorId}}/templates/{{templateId}}/versions/{{templateVersionId}}
+  body: none
+  auth: inherit
+}
+
+assert {
+  res.status: eq 204
+}
+
+docs {
+  Admin only. Deletes one version and its disk. VMs created from it keep their own copy.
+  409 while this version is being built.
+}

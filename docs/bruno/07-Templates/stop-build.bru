@@ -1,0 +1,22 @@
+meta {
+  name: Stop build
+  type: http
+  seq: 9
+}
+
+post {
+  url: {{baseUrl}}{{apiPrefix}}/hypervisors/{{hypervisorId}}/templates/{{templateId}}/stop
+  body: none
+  auth: inherit
+}
+
+assert {
+  res.status: eq 202
+}
+
+docs {
+  Admin only. Stops the running build of the template: SIGINT, Packer cancels and cleans up
+  (deletes its VM and files). The version goes stopping, then cancelled.
+  If Packer has not stopped after 2 minutes, the build is killed.
+  409 if no build is running.
+}

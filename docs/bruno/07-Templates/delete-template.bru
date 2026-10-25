@@ -1,7 +1,7 @@
 meta {
   name: Delete template
   type: http
-  seq: 4
+  seq: 15
 }
 
 delete {
@@ -15,6 +15,6 @@ assert {
 }
 
 docs {
-  Admin only. Deletes the template and its disk volume. VMs created from it keep their own copy.
-  409 while the template is still being built.
+  Admin only. Deletes the template, all its versions and their disks. VMs created from it keep
+  their own copy. 409 while a build is running: stop it first.
 }

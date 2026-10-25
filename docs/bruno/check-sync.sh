@@ -15,7 +15,7 @@ api=$(echo "$SPEC" | jq -r '.paths | to_entries[] | .key as $p | .value | keys[]
 
 col=$(grep -rhE '^(get|post|put|patch|delete) \{' --include='*.bru' -A1 . \
   | awk '/^(get|post|put|patch|delete) \{/ {m=toupper($1)} /url:/ {u=$2; print m " " u}' \
-  | sed -E 's/\{\{baseUrl\}\}//; s/\{\{apiPrefix\}\}/\/api/; s/\{\{[A-Za-z]+Id\}\}/{}/g' | norm | sort -u)
+  | sed -E 's/\{\{baseUrl\}\}//; s/\{\{apiPrefix\}\}/\/api/; s/\{\{[A-Za-z]+Id\}\}/{}/g; s/\?.*$//' | norm | sort -u)
 
 only_api=$(comm -23 <(echo "$api") <(echo "$col"))
 only_col=$(comm -13 <(echo "$api") <(echo "$col"))

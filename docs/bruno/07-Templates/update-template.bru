@@ -1,0 +1,26 @@
+meta {
+  name: Update template
+  type: http
+  seq: 4
+}
+
+patch {
+  url: {{baseUrl}}{{apiPrefix}}/hypervisors/{{hypervisorId}}/templates/{{templateId}}
+  body: json
+  auth: inherit
+}
+
+body:json {
+  {
+    "visibility": "restricted"
+  }
+}
+
+assert {
+  res.status: eq 200
+}
+
+docs {
+  Admin only. Body: UpdateTemplate {name, packer_config, disk_name, pool, visibility}, every field optional.
+  Existing versions are not changed: run "Rebuild template" to build a new version from the edited definition.
+}

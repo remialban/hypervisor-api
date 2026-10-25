@@ -124,7 +124,33 @@ pub fn create_routes(state: SharedState) -> Router {
         )
         .route(
             "/api/hypervisors/{hypervisor_id}/templates/{template_id}",
-            get(templates::get).delete(templates::delete),
+            get(templates::get)
+                .patch(templates::update)
+                .delete(templates::delete),
+        )
+        .route(
+            "/api/hypervisors/{hypervisor_id}/templates/{template_id}/versions",
+            get(templates::list_versions).post(templates::rebuild),
+        )
+        .route(
+            "/api/hypervisors/{hypervisor_id}/templates/{template_id}/versions/{version}",
+            get(templates::get_version).delete(templates::delete_version),
+        )
+        .route(
+            "/api/hypervisors/{hypervisor_id}/templates/{template_id}/versions/{version}/logs",
+            get(templates::logs),
+        )
+        .route(
+            "/api/hypervisors/{hypervisor_id}/templates/{template_id}/stop",
+            post(templates::stop),
+        )
+        .route(
+            "/api/hypervisors/{hypervisor_id}/templates/{template_id}/access",
+            get(templates::list_access),
+        )
+        .route(
+            "/api/hypervisors/{hypervisor_id}/templates/{template_id}/access/{user_id}",
+            put(templates::grant_access).delete(templates::revoke_access),
         )
         .route(
             "/api/hypervisors/{hypervisor_id}/templates/{template_id}/vms",
