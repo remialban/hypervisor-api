@@ -1,0 +1,19 @@
+meta {
+  name: Add member
+  type: http
+  seq: 5
+}
+
+put {
+  url: {{baseUrl}}{{apiPrefix}}/groups/{{groupId}}/members/{{userId}}
+  body: none
+  auth: inherit
+}
+
+assert {
+  res.status: eq 204
+}
+
+docs {
+  Admin only. Puts the user in the group (a user can be in several groups). Adding twice changes nothing.
+}

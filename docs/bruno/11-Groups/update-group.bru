@@ -1,0 +1,24 @@
+meta {
+  name: Update group
+  type: http
+  seq: 4
+}
+
+patch {
+  url: {{baseUrl}}{{apiPrefix}}/groups/{{groupId}}
+  body: json
+  auth: inherit
+}
+
+body:json {
+  {
+    "description": "Developers and testers"
+  }
+}
+assert {
+  res.status: eq 200
+}
+
+docs {
+  Admin only. Body: UpdateGroup {name, description}, both optional.
+}

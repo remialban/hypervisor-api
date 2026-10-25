@@ -6,6 +6,7 @@ use axum::{
 use crate::{
     audit,
     common::ping,
+    groups,
     hypervisors,
     infrastructure,
     jobs,
@@ -31,6 +32,7 @@ pub fn create_routes(state: SharedState) -> Router {
         // Accounts
         .route("/api/me", get(users::me))
         .route("/api/me/password", put(users::change_password))
+        .route("/api/me/groups", get(groups::my_groups))
         .route("/api/users", get(users::list_users).post(users::create_user))
         .route(
             "/api/users/{user_id}",
@@ -40,6 +42,24 @@ pub fn create_routes(state: SharedState) -> Router {
         )
         .route("/api/users/{user_id}/password", put(users::reset_password))
         .route("/api/users/{user_id}/quota", put(users::set_quota))
+        .route("/api/users/{user_id}/groups", get(groups::user_groups))
+        // Groups (admin, except /api/me/groups)
+        .route("/api/groups", get(groups::list).post(groups::create))
+        .route(
+            "/api/groups/{group_id}",
+            get(groups::get)
+                .patch(groups::update)
+                .delete(groups::delete),
+        )
+        .route("/api/groups/{group_id}/members", get(groups::members))
+        .route(
+            "/api/groups/{group_id}/members/{user_id}",
+            put(groups::add_member).delete(groups::remove_member),
+        )
+        .route(
+            "/api/groups/{group_id}/subgroups/{child_id}",
+            put(groups::add_subgroup).delete(groups::remove_subgroup),
+        )
         .route("/api/settings", get(users::get_settings).put(users::put_settings))
         .route("/api/audit", get(audit::list))
         .route(

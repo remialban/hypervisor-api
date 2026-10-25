@@ -1,0 +1,19 @@
+meta {
+  name: Delete group
+  type: http
+  seq: 13
+}
+
+delete {
+  url: {{baseUrl}}{{apiPrefix}}/groups/{{groupId}}
+  body: none
+  auth: inherit
+}
+
+assert {
+  res.status: eq 204
+}
+
+docs {
+  Admin only. Deletes the group. Its members and subgroups are kept, only their link to it goes.
+}

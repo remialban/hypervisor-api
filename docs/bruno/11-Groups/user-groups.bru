@@ -1,0 +1,19 @@
+meta {
+  name: Groups of a user
+  type: http
+  seq: 12
+}
+
+get {
+  url: {{baseUrl}}{{apiPrefix}}/users/{{userId}}/groups
+  body: none
+  auth: inherit
+}
+
+assert {
+  res.status: eq 200
+}
+
+docs {
+  Admin only. The groups a user is in, directly or through nested groups.
+}

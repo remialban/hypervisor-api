@@ -1,0 +1,19 @@
+meta {
+  name: Remove member
+  type: http
+  seq: 6
+}
+
+delete {
+  url: {{baseUrl}}{{apiPrefix}}/groups/{{groupId}}/members/{{userId}}
+  body: none
+  auth: inherit
+}
+
+assert {
+  res.status: eq 204
+}
+
+docs {
+  Admin only. Takes the user out of the group (the account is kept).
+}

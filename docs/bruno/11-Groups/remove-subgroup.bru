@@ -1,0 +1,19 @@
+meta {
+  name: Remove subgroup
+  type: http
+  seq: 10
+}
+
+delete {
+  url: {{baseUrl}}{{apiPrefix}}/groups/{{groupId}}/subgroups/{{subgroupId}}
+  body: none
+  auth: inherit
+}
+
+assert {
+  res.status: eq 204
+}
+
+docs {
+  Admin only. Takes the subgroup out of the group (the subgroup itself is kept).
+}

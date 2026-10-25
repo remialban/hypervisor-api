@@ -5,6 +5,7 @@ mod common;
 mod config;
 mod docs;
 mod errors;
+mod groups;
 #[cfg(test)]
 mod auth_tests;
 #[cfg(test)]

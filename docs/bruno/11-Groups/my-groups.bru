@@ -1,0 +1,19 @@
+meta {
+  name: My groups
+  type: http
+  seq: 11
+}
+
+get {
+  url: {{baseUrl}}{{apiPrefix}}/me/groups
+  body: none
+  auth: inherit
+}
+
+assert {
+  res.status: eq 200
+}
+
+docs {
+  Any user. The groups the caller is in, directly (direct: true) or through a nested group. Read only.
+}

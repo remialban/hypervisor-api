@@ -1,0 +1,19 @@
+meta {
+  name: List groups
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{baseUrl}}{{apiPrefix}}/groups
+  body: none
+  auth: inherit
+}
+
+assert {
+  res.status: eq 200
+}
+
+docs {
+  Admin only. Every group with its number of direct members and subgroups.
+}

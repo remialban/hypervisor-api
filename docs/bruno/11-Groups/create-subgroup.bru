@@ -1,0 +1,27 @@
+meta {
+  name: Create subgroup (for nesting)
+  type: http
+  seq: 7
+}
+
+post {
+  url: {{baseUrl}}{{apiPrefix}}/groups
+  body: json
+  auth: inherit
+}
+
+body:json {
+  {
+    "name": "devs-backend"
+  }
+}
+assert {
+  res.status: eq 201
+}
+script:post-response {
+  if (res.status === 201) { bru.setVar("subgroupId", res.body.id); }
+}
+
+docs {
+  Admin only. Creates a second group and keeps its id in subgroupId, for the requests below.
+}

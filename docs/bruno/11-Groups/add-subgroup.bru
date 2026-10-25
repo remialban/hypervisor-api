@@ -1,0 +1,20 @@
+meta {
+  name: Add subgroup
+  type: http
+  seq: 8
+}
+
+put {
+  url: {{baseUrl}}{{apiPrefix}}/groups/{{groupId}}/subgroups/{{subgroupId}}
+  body: none
+  auth: inherit
+}
+
+assert {
+  res.status: eq 204
+}
+
+docs {
+  Admin only. Puts the group subgroupId inside groupId: its members become (indirect) members of groupId.
+  409 if this would put a group inside itself (groupId is already inside subgroupId), 400 for the group itself.
+}

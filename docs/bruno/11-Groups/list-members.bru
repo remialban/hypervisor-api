@@ -1,0 +1,19 @@
+meta {
+  name: List effective members
+  type: http
+  seq: 9
+}
+
+get {
+  url: {{baseUrl}}{{apiPrefix}}/groups/{{groupId}}/members
+  body: none
+  auth: inherit
+}
+
+assert {
+  res.status: eq 200
+}
+
+docs {
+  Admin only. Every user of the group, through its nested groups too. direct: false for those only in a subgroup.
+}

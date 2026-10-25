@@ -1,0 +1,19 @@
+meta {
+  name: Get group
+  type: http
+  seq: 3
+}
+
+get {
+  url: {{baseUrl}}{{apiPrefix}}/groups/{{groupId}}
+  body: none
+  auth: inherit
+}
+
+assert {
+  res.status: eq 200
+}
+
+docs {
+  Admin only. The group, its direct members, its subgroups and the groups it is directly in (parents).
+}

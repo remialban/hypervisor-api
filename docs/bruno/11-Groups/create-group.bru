@@ -1,0 +1,28 @@
+meta {
+  name: Create group
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{baseUrl}}{{apiPrefix}}/groups
+  body: json
+  auth: inherit
+}
+
+body:json {
+  {
+    "name": "devs",
+    "description": "Developers"
+  }
+}
+assert {
+  res.status: eq 201
+}
+script:post-response {
+  if (res.status === 201) { bru.setVar("groupId", res.body.id); }
+}
+
+docs {
+  Admin only. Body: CreateGroup {name, description}. Names are unique, case-insensitive.
+}
