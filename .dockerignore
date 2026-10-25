@@ -8,3 +8,7 @@ api.db
 *.db-wal
 data
 docs/bruno/node_modules
+# Secrets: never in the build context (TLS key unreadable anyway, .env)
+tls
+*.pem
+.env

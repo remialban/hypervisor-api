@@ -141,35 +141,58 @@ Arreter l'API ou `websockify` avec `Ctrl+C`.
 
 ### Lancer l'API et noVNC avec Docker Compose
 
-Le Compose lance deux conteneurs distincts :
+Le Compose lance trois conteneurs :
 
-- `api` : l'API Rust sur le port `3000` ;
-- `novnc` : noVNC et websockify sur le port `6080`.
+- `haproxy` : la seule porte d'entrée, en HTTPS (port `443`, le port `80` redirige
+  vers HTTPS). Il envoie `/api/…`, `/swagger-ui…`, `/api-docs/…` et `/ping` à l'API,
+  et tout le reste à noVNC ;
+- `api` : l'API Rust. Son port `3000` n'est ouvert que sur la machine elle-même
+  (`127.0.0.1:3000`, pour Bruno ou curl en local) ;
+- `novnc` : noVNC et websockify. Son port `6080` n'est pas publié du tout.
 
-L'API garde sa base SQLite (`api.db`) dans `./data`. Les deux conteneurs partagent
-en plus un volume nommé `vnc-tokens` qui ne contient que le fichier de jetons
+Le détail (certificat, en-têtes, limite sur l'authentification, dépannage) est dans
+[docs/HAPROXY.md](docs/HAPROXY.md).
+
+L'API garde sa base SQLite (`api.db`) dans `./data`. L'API et noVNC partagent en
+plus un volume nommé `vnc-tokens` qui ne contient que le fichier de jetons
 `vm.cfg` : l'API l'écrit, websockify le relit à chaque connexion (en lecture
 seule). noVNC ne voit donc jamais la base ni les comptes. Les jetons noVNC sont
 aléatoires et expirent au bout de deux minutes.
 
-Copiez `.env.example` en `.env` et adaptez-le. `JWT_SECRET` et `ADMIN_PASSWORD`
-sont obligatoires (Compose refuse de démarrer sans eux) :
+HAProxy a besoin d'un certificat et de sa clé privée, en PEM, dans **deux fichiers**
+(la clé lisible par l'UID 99). Pour un essai, un certificat auto-signé suffit :
+
+```bash
+mkdir -p tls
+openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 365 \
+  -subj "/CN=localhost" -addext "subjectAltName=DNS:localhost" \
+  -keyout tls/key.pem -out tls/cert.pem
+sudo chown 99:99 tls/key.pem && sudo chmod 400 tls/key.pem
+```
+
+Copiez `.env.example` en `.env` et adaptez-le. `JWT_SECRET`, `ADMIN_PASSWORD`,
+`TLS_CERT_PATH` et `TLS_KEY_PATH` sont obligatoires (Compose refuse de démarrer sans
+eux) :
 
 ```dotenv
 SSH_PRIVATE_KEY_HOST_PATH=/home/user/.ssh/id_ed25519
-NOVNC_URL=http://localhost:6080/vnc.html
+TLS_CERT_PATH=./tls/cert.pem
+TLS_KEY_PATH=./tls/key.pem
+HTTP_PORT=80
+HTTPS_PORT=443
+NOVNC_URL=https://localhost/vnc.html
 DOCKERHUB_USERNAME=remi
 TAG=latest
 JWT_SECRET=<au moins 32 caractères aléatoires, par exemple : openssl rand -base64 48>
 ADMIN_USERNAME=admin
 ADMIN_PASSWORD=<mot de passe du premier administrateur>
-CORS_ALLOWED_ORIGINS=http://localhost:4200
+CORS_ALLOWED_ORIGINS=
 ```
 
 `ADMIN_USERNAME` / `ADMIN_PASSWORD` ne servent qu'au premier démarrage, quand la
 base ne contient encore aucun compte. `CORS_ALLOWED_ORIGINS` liste les origines du
-front Angular autorisées à appeler l'API depuis un navigateur ; laissez-le vide si le
-front passe par un reverse proxy sur la même origine. Voir
+front Angular autorisées à appeler l'API depuis un navigateur (en `https://`) ;
+laissez-le vide si le front est servi par la même adresse que l'API. Voir
 [docs/AUTH.md](docs/AUTH.md) pour toutes les variables.
 
 `DOCKERHUB_USERNAME` et `TAG` désignent les images publiées sur Docker Hub
@@ -184,38 +207,32 @@ connexions `qemu+ssh`) : ce fichier doit exister.
 Puis lancez l'application :
 
 ```bash
-docker compose up --build
+docker compose up --build --remove-orphans
 ```
 
-L'API est disponible sur `http://localhost:3000`, Swagger sur
-`http://localhost:3000/swagger-ui/` et noVNC sur
-`http://localhost:6080/vnc.html`. Connectez-vous avec le compte administrateur
-(bouton **Authorize** de Swagger, ou `POST /api/auth/login`).
+L'API est disponible sur `https://localhost/api/…`, Swagger sur
+`https://localhost/swagger-ui/` et noVNC sur `https://localhost/vnc.html`.
+Connectez-vous avec le compte administrateur (bouton **Authorize** de Swagger, ou
+`POST /api/auth/login`). Avec le certificat auto-signé, acceptez l'avertissement du
+navigateur une fois, et ajoutez `--cacert tls/cert.pem` à curl.
 
 Sauvegardez `./data/api.db` : il contient les comptes, les droits, les
 propriétaires de VM et le journal d'audit. Changer `JWT_SECRET` déconnecte tout
 le monde mais ne perd rien.
 
-Servez l'API et noVNC en HTTPS (reverse proxy) dès qu'elles sont accessibles
-autrement qu'en local : les mots de passe et les jetons circulent en clair sur
-HTTP.
-
 `NOVNC_URL` est l'URL de base utilisée par l'API pour construire la propriété
 `novnc_url` retournée par l'endpoint VNC. L'API ajoute automatiquement le
-token et `autoconnect=true`.
-
-Si Docker est lancé sur une machine accessible à l'adresse
-`192.168.122.100`, utilisez par exemple :
+token et `autoconnect=true`. Elle doit être l'adresse HTTPS de HAProxy, avec le
+nom du certificat : noVNC ouvre alors la console en `wss://` (chiffré). Si Docker
+tourne sur une machine joignable à `kvm.example.com` :
 
 ```dotenv
-NOVNC_URL=http://192.168.122.100:6080/vnc.html
+NOVNC_URL=https://kvm.example.com/vnc.html
 ```
 
-Lancez ensuite :
-
-```bash
-docker compose up --build --remove-orphans
-```
+HAProxy chiffre le trajet entre le navigateur et le serveur, mais le port VNC des VM
+sur l'hyperviseur reste ouvert sur le réseau : filtrez-le (voir la fin de
+[docs/HAPROXY.md](docs/HAPROXY.md)).
 
 Le socket `/var/run/libvirt/libvirt-sock` est monté pour les hyperviseurs
 locaux. La clé privée SSH est montée en lecture seule dans le backend à

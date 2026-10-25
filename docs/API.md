@@ -1,6 +1,10 @@
 # Documentation API
 
-Base URL : `http://127.0.0.1:3000`
+Base URL : `http://127.0.0.1:3000` (API lancée avec `cargo run`, ou port local du Compose).
+
+Avec Docker Compose, l'accès depuis le réseau passe par HAProxy en HTTPS : même chemins,
+sur `https://<serveur>` (par exemple `https://kvm.example.com/api/hypervisors`). Voir
+[HAPROXY.md](HAPROXY.md).
 
 ## Authentification
 

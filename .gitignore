@@ -10,6 +10,9 @@
 .env
 .env.*
 !.env.example
+# TLS certificate and private key for HAProxy (docs/HAPROXY.md)
+/tls/
+*.pem
 
 # Editor and operating system files
 .vscode/
