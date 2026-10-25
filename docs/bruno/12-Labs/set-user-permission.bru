@@ -1,0 +1,26 @@
+meta {
+  name: Set user permission
+  type: http
+  seq: 10
+}
+
+put {
+  url: {{baseUrl}}{{apiPrefix}}/hypervisors/{{hypervisorId}}/labs/{{labId}}/permissions/users/{{userId}}
+  body: json
+  auth: inherit
+}
+
+body:json {
+  {
+    "role": "use",
+    "max_instances": 1
+  }
+}
+
+assert {
+  res.status: eq 204
+}
+
+docs {
+  Admin only. role use (deploy and drive one's own instances) or manage (also edit the lab, see and act on every instance). max_instances: instances each user covered may own; null = no limit.
+}

@@ -13,6 +13,7 @@ mod http_tests;
 mod hypervisors;
 mod infrastructure;
 mod jobs;
+mod labs;
 mod libvirt;
 mod models;
 mod routes;

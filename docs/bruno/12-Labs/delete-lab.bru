@@ -1,0 +1,19 @@
+meta {
+  name: Delete lab
+  type: http
+  seq: 24
+}
+
+delete {
+  url: {{baseUrl}}{{apiPrefix}}/hypervisors/{{hypervisorId}}/labs/{{labId}}
+  body: none
+  auth: inherit
+}
+
+assert {
+  res.status: eq 204
+}
+
+docs {
+  Admin only. 409 while the lab has instances.
+}

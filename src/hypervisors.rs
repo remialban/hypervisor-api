@@ -147,13 +147,29 @@ pub async fn update(
     get(State(state), user, Path(id)).await
 }
 
-#[utoipa::path(delete, path = "/api/hypervisors/{id}", params(("id" = String, Path, description = "Hypervisor identifier")), responses((status = 204), (status = 404, body = Message)), tag = "Hypervisors")]
+#[utoipa::path(delete, path = "/api/hypervisors/{id}", params(("id" = String, Path, description = "Hypervisor identifier")), responses((status = 204), (status = 404, body = Message), (status = 409, body = Message, description = "Lab instances are deployed on it")), tag = "Hypervisors")]
 pub async fn delete(
     State(state): State<SharedState>,
     user: AuthUser,
     Path(id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
     user.require_admin()?;
+    // The VMs of lab instances live on the hypervisor: they are deleted with their instance.
+    let instances: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM lab_instances i JOIN labs l ON l.id = i.lab_id WHERE l.hypervisor_id = $1",
+    )
+    .bind(&id)
+    .fetch_one(&state.db)
+    .await
+    .map_err(|_| error_response(StatusCode::INTERNAL_SERVER_ERROR, "Database read failed"))?;
+    if instances > 0 {
+        return Err(error_response(
+            StatusCode::CONFLICT,
+            &format!(
+                "{instances} lab instance(s) are deployed on this hypervisor: delete them first"
+            ),
+        ));
+    }
     let result = sqlx::query("DELETE FROM hypervisors WHERE id = $1")
         .bind(&id)
         .execute(&state.db)

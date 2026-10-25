@@ -55,7 +55,8 @@ pub struct DomainSpec {
     pub disks: Vec<DiskAttachment>,
     /// Path of the installation ISO, attached as a CD-ROM and booted first.
     pub iso_path: Option<String>,
-    pub network: String,
+    /// libvirt networks, one NIC each, in this order (the guest sees them in the same order).
+    pub networks: Vec<String>,
     /// Address the VNC display listens on.
     pub vnc_listen: String,
 }
@@ -77,7 +78,7 @@ fn text_element(name: &str, attributes: &[(&str, &str)], text: &str) -> Element 
     element
 }
 
-/// Definition of a new VM: virtio devices, VNC display, one NIC on a libvirt network.
+/// Definition of a new VM: virtio devices, VNC display, one NIC per libvirt network.
 pub fn new_domain_xml(spec: &DomainSpec) -> Result<String, ApiError> {
     let mut os_type = text_element("type", &[], "hvm");
     if spec.kvm {
@@ -127,16 +128,18 @@ pub fn new_domain_xml(spec: &DomainSpec) -> Result<String, ApiError> {
             ],
         )));
     }
-    let listen = &spec.vnc_listen;
-    let extra_devices = vec![
-        element(
+    for network in &spec.networks {
+        devices.children.push(XMLNode::Element(element(
             "interface",
             &[("type", "network")],
             vec![
-                element("source", &[("network", &spec.network)], vec![]),
+                element("source", &[("network", network)], vec![]),
                 element("model", &[("type", "virtio")], vec![]),
             ],
-        ),
+        )));
+    }
+    let listen = &spec.vnc_listen;
+    let extra_devices = vec![
         element(
             "graphics",
             &[
@@ -255,6 +258,25 @@ pub fn volume_format(volume_xml: &str) -> Result<String, ApiError> {
         .and_then(|format| format.attributes.get("type"))
         .cloned()
         .unwrap_or_else(|| "unknown".into()))
+}
+
+/// The libvirt networks of the NICs of a domain, in order (NICs of another type are skipped).
+pub fn interface_networks(domain_xml: &str) -> Result<Vec<String>, ApiError> {
+    let root = parse(domain_xml)?;
+    let Some(devices) = root.get_child("devices") else {
+        return Ok(Vec::new());
+    };
+    Ok(devices
+        .children
+        .iter()
+        .filter_map(|node| match node {
+            XMLNode::Element(device) if device.name == "interface" => device
+                .get_child("source")
+                .and_then(|source| source.attributes.get("network"))
+                .cloned(),
+            _ => None,
+        })
+        .collect())
 }
 
 /// Forward mode (`nat`, `route`...) of a network definition, `None` for an isolated one.
@@ -427,7 +449,7 @@ mod tests {
                 },
             ],
             iso_path: Some("/iso/debian.iso".into()),
-            network: "default".into(),
+            networks: vec!["default".into()],
             vnc_listen: "0.0.0.0".into(),
         }
     }
@@ -522,10 +544,27 @@ mod tests {
     }
 
     #[test]
+    fn one_nic_per_network_in_order() {
+        let mut spec = spec();
+        spec.networks = vec!["default".into(), "lab-lan1".into(), "lab-lan2".into()];
+        let xml = new_domain_xml(&spec).unwrap();
+        assert_eq!(
+            interface_networks(&xml).unwrap(),
+            vec!["default", "lab-lan1", "lab-lan2"]
+        );
+        spec.networks = vec![];
+        assert!(
+            interface_networks(&new_domain_xml(&spec).unwrap())
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
     fn new_domain_escapes_hostile_values() {
         let mut spec = spec();
         spec.disks[0].path = "/mnt/it's a \"disk\" & <more>.qcow2".into();
-        spec.network = "net'/><evil/>".into();
+        spec.networks = vec!["net'/><evil/>".into()];
         let xml = new_domain_xml(&spec).unwrap();
         let root = Element::parse(xml.as_bytes()).expect("still well-formed");
         let devices = root.get_child("devices").unwrap();

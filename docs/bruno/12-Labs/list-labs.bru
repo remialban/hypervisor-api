@@ -1,0 +1,19 @@
+meta {
+  name: List labs
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{baseUrl}}{{apiPrefix}}/hypervisors/{{hypervisorId}}/labs
+  body: none
+  auth: inherit
+}
+
+assert {
+  res.status: eq 200
+}
+
+docs {
+  The labs the caller has a right on (admins: all), each with access {level, max_instances, instance_count}.
+}

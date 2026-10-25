@@ -1,0 +1,19 @@
+meta {
+  name: Remove group permission
+  type: http
+  seq: 21
+}
+
+delete {
+  url: {{baseUrl}}{{apiPrefix}}/hypervisors/{{hypervisorId}}/labs/{{labId}}/permissions/groups/{{groupId}}
+  body: none
+  auth: inherit
+}
+
+assert {
+  res.status: eq 204
+}
+
+docs {
+  Admin only.
+}

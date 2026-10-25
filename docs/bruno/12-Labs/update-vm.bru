@@ -1,0 +1,33 @@
+meta {
+  name: Update lab VM
+  type: http
+  seq: 9
+}
+
+put {
+  url: {{baseUrl}}{{apiPrefix}}/hypervisors/{{hypervisorId}}/labs/{{labId}}/vms/{{labVmId}}
+  body: json
+  auth: inherit
+}
+
+body:json {
+  {
+    "name": "opnsense",
+    "role": "router",
+    "template_id": "{{templateId}}",
+    "memory_mb": 4096,
+    "vcpus": 2,
+    "networks": [
+      "{{labWanId}}",
+      "{{labLanId}}"
+    ]
+  }
+}
+
+assert {
+  res.status: eq 200
+}
+
+docs {
+  Admins and lab managers. Replaces the whole VM. Instances already deployed keep what they have.
+}

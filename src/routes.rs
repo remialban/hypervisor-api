@@ -4,8 +4,8 @@ use axum::{
 };
 
 use crate::{
-    audit, common::ping, groups, hypervisors, infrastructure, jobs, shares, state::SharedState,
-    templates, users, vm_options, vms, vnc,
+    audit, common::ping, groups, hypervisors, infrastructure, jobs, labs, shares,
+    state::SharedState, templates, users, vm_options, vms, vnc,
 };
 
 pub fn create_routes(state: SharedState) -> Router {
@@ -22,6 +22,7 @@ pub fn create_routes(state: SharedState) -> Router {
         .route("/api/me", get(users::me))
         .route("/api/me/password", put(users::change_password))
         .route("/api/me/groups", get(groups::my_groups))
+        .route("/api/me/lab-instances", get(labs::my_instances))
         .route("/api/users", get(users::list_users).post(users::create_user))
         .route(
             "/api/users/{user_id}",
@@ -168,6 +169,59 @@ pub fn create_routes(state: SharedState) -> Router {
         .route(
             "/api/hypervisors/{hypervisor_id}/templates/{template_id}/vms",
             post(templates::create_vm),
+        )
+        // Labs
+        .route(
+            "/api/hypervisors/{hypervisor_id}/labs",
+            get(labs::list).post(labs::create),
+        )
+        .route(
+            "/api/hypervisors/{hypervisor_id}/labs/{lab_id}",
+            get(labs::get).patch(labs::update).delete(labs::delete),
+        )
+        .route(
+            "/api/hypervisors/{hypervisor_id}/labs/{lab_id}/networks",
+            post(labs::add_network),
+        )
+        .route(
+            "/api/hypervisors/{hypervisor_id}/labs/{lab_id}/networks/{network_id}",
+            axum::routing::delete(labs::remove_network),
+        )
+        .route(
+            "/api/hypervisors/{hypervisor_id}/labs/{lab_id}/vms",
+            post(labs::add_vm),
+        )
+        .route(
+            "/api/hypervisors/{hypervisor_id}/labs/{lab_id}/vms/{lab_vm_id}",
+            put(labs::update_vm).delete(labs::remove_vm),
+        )
+        .route(
+            "/api/hypervisors/{hypervisor_id}/labs/{lab_id}/permissions",
+            get(labs::list_permissions),
+        )
+        .route(
+            "/api/hypervisors/{hypervisor_id}/labs/{lab_id}/permissions/users/{user_id}",
+            put(labs::set_user_permission).delete(labs::remove_user_permission),
+        )
+        .route(
+            "/api/hypervisors/{hypervisor_id}/labs/{lab_id}/permissions/groups/{group_id}",
+            put(labs::set_group_permission).delete(labs::remove_group_permission),
+        )
+        .route(
+            "/api/hypervisors/{hypervisor_id}/labs/{lab_id}/instances",
+            get(labs::list_instances).post(labs::create_instance),
+        )
+        .route(
+            "/api/hypervisors/{hypervisor_id}/labs/{lab_id}/instances/{instance_id}",
+            get(labs::get_instance).delete(labs::delete_instance),
+        )
+        .route(
+            "/api/hypervisors/{hypervisor_id}/labs/{lab_id}/instances/{instance_id}/start",
+            post(labs::start_instance),
+        )
+        .route(
+            "/api/hypervisors/{hypervisor_id}/labs/{lab_id}/instances/{instance_id}/stop",
+            post(labs::stop_instance),
         )
         .route("/api/jobs/{job_id}", get(jobs::get))
         .with_state(state)

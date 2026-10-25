@@ -1,0 +1,19 @@
+meta {
+  name: Stop instance
+  type: http
+  seq: 16
+}
+
+post {
+  url: {{baseUrl}}{{apiPrefix}}/hypervisors/{{hypervisorId}}/labs/{{labId}}/instances/{{labInstanceId}}/stop?force=true
+  body: none
+  auth: inherit
+}
+
+assert {
+  res.status: eq 200
+}
+
+docs {
+  Owner, lab managers, admins. ACPI shutdown of every VM (routers last); force=true powers them off at once.
+}

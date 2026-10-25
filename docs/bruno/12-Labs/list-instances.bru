@@ -1,0 +1,19 @@
+meta {
+  name: List instances
+  type: http
+  seq: 15
+}
+
+get {
+  url: {{baseUrl}}{{apiPrefix}}/hypervisors/{{hypervisorId}}/labs/{{labId}}/instances
+  body: none
+  auth: inherit
+}
+
+assert {
+  res.status: eq 200
+}
+
+docs {
+  The caller's instances; every instance for lab managers and admins.
+}

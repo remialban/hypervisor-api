@@ -1,0 +1,19 @@
+meta {
+  name: Remove lab VM
+  type: http
+  seq: 22
+}
+
+delete {
+  url: {{baseUrl}}{{apiPrefix}}/hypervisors/{{hypervisorId}}/labs/{{labId}}/vms/{{labVmId}}
+  body: none
+  auth: inherit
+}
+
+assert {
+  res.status: eq 204
+}
+
+docs {
+  Admins and lab managers. 409 if an instance still has it.
+}

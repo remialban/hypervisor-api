@@ -1,0 +1,37 @@
+meta {
+  name: Add router VM (OPNsense)
+  type: http
+  seq: 5
+}
+
+post {
+  url: {{baseUrl}}{{apiPrefix}}/hypervisors/{{hypervisorId}}/labs/{{labId}}/vms
+  body: json
+  auth: inherit
+}
+
+body:json {
+  {
+    "name": "opnsense",
+    "role": "router",
+    "template_id": "{{templateId}}",
+    "memory_mb": 2048,
+    "vcpus": 2,
+    "networks": [
+      "{{labWanId}}",
+      "{{labLanId}}"
+    ]
+  }
+}
+
+assert {
+  res.status: eq 201
+}
+
+script:post-response {
+  if (res.status === 201) { bru.setVar("labVmId", res.body.id); }
+}
+
+docs {
+  Admins and lab managers. Body: LabVmBody. networks: lab network ids, one NIC each, in order (for an OPNsense: WAN first). role router: created and started before the other VMs. The template must be one the caller may use; version absent = latest built.
+}

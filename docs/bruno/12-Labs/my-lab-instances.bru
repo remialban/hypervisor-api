@@ -1,0 +1,19 @@
+meta {
+  name: My lab instances
+  type: http
+  seq: 18
+}
+
+get {
+  url: {{baseUrl}}{{apiPrefix}}/me/lab-instances
+  body: none
+  auth: inherit
+}
+
+assert {
+  res.status: eq 200
+}
+
+docs {
+  Any user. The caller's lab instances, on every hypervisor.
+}

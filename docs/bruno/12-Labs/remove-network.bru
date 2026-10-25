@@ -1,0 +1,19 @@
+meta {
+  name: Remove network
+  type: http
+  seq: 23
+}
+
+delete {
+  url: {{baseUrl}}{{apiPrefix}}/hypervisors/{{hypervisorId}}/labs/{{labId}}/networks/{{labWanId}}
+  body: none
+  auth: inherit
+}
+
+assert {
+  res.status: eq 204
+}
+
+docs {
+  Admins and lab managers. 409 while a VM of the lab is plugged into it, or an instance was deployed with it (the router, removed above, was the only VM on the WAN).
+}

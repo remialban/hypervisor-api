@@ -1,0 +1,30 @@
+meta {
+  name: Create lab
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{baseUrl}}{{apiPrefix}}/hypervisors/{{hypervisorId}}/labs
+  body: json
+  auth: inherit
+}
+
+body:json {
+  {
+    "name": "lab-reseau",
+    "description": "Deux LAN derrière un OPNsense"
+  }
+}
+
+assert {
+  res.status: eq 201
+}
+
+script:post-response {
+  if (res.status === 201) { bru.setVar("labId", res.body.id); }
+}
+
+docs {
+  Admin only. Body: CreateLab {name, description, visibility}. visibility: restricted (default, only through permissions) or hypervisor (also every user granted the hypervisor).
+}

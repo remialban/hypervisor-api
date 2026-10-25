@@ -85,6 +85,19 @@ impl JobRegistry {
         }
     }
 
+    /// Ends a job that does not produce a single VM (a lab deployment makes several): it
+    /// only stops counting its reservation against the quota.
+    pub fn end(&self, id: &str, error: Option<String>) {
+        if let Some(job) = self.lock().get_mut(id) {
+            job.status = if error.is_some() {
+                JobStatus::Failed
+            } else {
+                JobStatus::Succeeded
+            };
+            job.error = error;
+        }
+    }
+
     pub fn get(&self, id: &str) -> Option<Job> {
         self.lock().get(id).cloned()
     }

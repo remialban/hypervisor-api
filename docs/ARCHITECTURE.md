@@ -59,6 +59,7 @@ l'hyperviseur. La base ne garde que ce que libvirt ignore :
 | Accès aux hyperviseurs, groupes | Réseaux virtuels |
 | **Propriétaire** de chaque VM (par son UUID libvirt), prêts | Ports VNC des consoles |
 | Templates, leurs versions et logs de build, droits sur les templates | Disques construits par Packer |
+| Labos (réseaux, VM, câblage), droits sur les labos, instances déployées | Réseaux internes et VM des instances |
 | Jetons de console, journal d'audit | |
 
 Une VM créée hors de l'API (avec `virsh`, par exemple) apparaît donc aussi, mais sans
@@ -111,7 +112,9 @@ sequenceDiagram
   admin peut les **donner** à quelqu'un d'autre.
 - Les **groupes** (qui peuvent contenir des groupes) servent à donner des **droits sur les
   templates** : `use` (créer des VM, avec un maximum par personne) ou `manage` (modifier et
-  reconstruire).
+  reconstruire), et des **droits sur les labos** sur le même modèle (`use` : déployer ses
+  instances, avec un maximum par personne ; `manage` : modifier le labo et piloter toutes
+  ses instances).
 
 Le détail est dans [AUTH.md](AUTH.md).
 
@@ -137,6 +140,55 @@ Un template est une **configuration Packer**. Construire un template (`templates
 Créer une VM depuis un template copie le disque de la version, puis définit la VM. Un build
 interrompu par un redémarrage de l'API est marqué `failed` à la première requête sur les
 templates qui suit.
+
+### Les labos
+
+Un labo (`labs.rs`) est une **définition** : des réseaux et des VM issues de templates, chacune
+avec ses cartes réseau dans l'ordre.
+
+```mermaid
+flowchart LR
+    internet(("Internet"))
+    subgraph instance["Instance d'un labo"]
+        wan["wan<br/>(externe : réseau libvirt « default »)"]
+        lan1["lan1<br/>(interne : lab-‹id›-lan1)"]
+        lan2["lan2<br/>(interne : lab-‹id›-lan2)"]
+        opn["opnsense<br/>(router)"]
+        c1["client1"]
+        c2["client2"]
+    end
+    internet --- wan
+    wan -- "carte 1 (WAN)" --- opn
+    opn -- "carte 2" --- lan1
+    opn -- "carte 3" --- lan2
+    lan1 --- c1
+    lan2 --- c2
+
+    classDef net fill:#1e3a8a,stroke:#93c5fd,color:#ffffff
+    classDef vm fill:#065f46,stroke:#6ee7b7,color:#ffffff
+    class wan,lan1,lan2 net
+    class opn,c1,c2 vm
+```
+
+**Déployer** un labo crée une **instance**, en arrière-plan (`202`) :
+
+1. la place est vérifiée sous verrou : quota de l'utilisateur pour **toutes** les VM du labo,
+   et `max_instances` ; l'instance est enregistrée en `deploying`, et ses ressources sont
+   réservées par une tâche ;
+2. chaque réseau **interne** est créé sur l'hyperviseur (réseau isolé `lab-‹id›-‹nom›`) ; les
+   réseaux **externes** sont des réseaux libvirt existants, partagés ;
+3. chaque VM est créée depuis le disque de son template (copie), avec ses cartes branchées
+   dans l'ordre, les **routeurs d'abord** ; elle appartient à celui qui déploie ;
+4. si demandé, les VM sont démarrées (routeurs d'abord) ; l'instance passe en `ready`.
+
+Si une étape échoue, tout ce qui a été créé est supprimé et l'instance passe en `failed`,
+avec la raison. Les VM d'une instance sont des VM ordinaires de leur propriétaire : les routes
+des VM (console, démarrage, arrêt) marchent dessus. Supprimer l'instance supprime ses VM,
+leurs disques et ses réseaux internes.
+
+L'API ne configure pas les routeurs : un OPNsense reçoit ses cartes dans l'ordre (la
+première = WAN) ; ses adresses et son DHCP viennent de son template, ou se règlent dans sa
+console.
 
 ### Les consoles
 
@@ -168,7 +220,8 @@ Une tâche de fond retire les jetons expirés du fichier (`vnc.rs`).
 hypervisor-api/
 ├── src/                      Code de l'API (Rust) — détail ci-dessous
 ├── migrations/
-│   └── 0001_init.sql         Schéma PostgreSQL, appliqué au démarrage
+│   ├── 0001_init.sql         Schéma PostgreSQL de départ
+│   └── 0002_labs.sql         Tables des labos (appliquées au démarrage, dans l'ordre)
 ├── docs/                     Documentation technique
 │   ├── API.md                Référence des routes
 │   ├── ARCHITECTURE.md       Ce document
@@ -177,7 +230,7 @@ hypervisor-api/
 │   ├── HAPROXY.md            HTTPS : certificats, HAProxy, dépannage
 │   ├── BRUNO.md              Utiliser la collection Bruno
 │   └── bruno/                Collection Bruno : une requête par route, par thème
-│       ├── 00-Auth/ … 11-Groups/
+│       ├── 00-Auth/ … 12-Labs/
 │       ├── environments/     local.bru, remote-kvm.bru
 │       └── check-sync.sh     Vérifie que la collection couvre toute l'OpenAPI
 ├── haproxy/                  Configuration des HAProxy (HTTPS)
@@ -248,6 +301,7 @@ d'entrée et de sortie, ses requêtes SQL et ses tests.
 | `infrastructure.rs` | Disques, pools de stockage et réseaux. |
 | `jobs.rs` | Les tâches en arrière-plan, gardées en mémoire. |
 | `templates.rs` | Templates Packer : définitions, versions, builds (en SSH), logs, droits, création de VM. |
+| `labs.rs` | Labos : réseaux, VM et câblage, droits, déploiement des instances (réseaux internes, VM), démarrage, arrêt, suppression. |
 | `vnc.rs` | Jetons de console et fichier lu par websockify. |
 
 **Tests**

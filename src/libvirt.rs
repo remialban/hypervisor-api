@@ -381,7 +381,7 @@ fn create_volumes_and_define(
         uefi: request.firmware.as_deref() == Some("uefi"),
         disks: attachments,
         iso_path: plan.iso_path,
-        network: plan.network,
+        networks: vec![plan.network],
         vnc_listen: vnc_listen.to_string(),
     };
     Ok(Domain::define_xml(conn, &vm_xml::new_domain_xml(&spec)?)?)
@@ -619,7 +619,7 @@ fn to_vm(domain: &Domain, hypervisor_id: &str) -> Result<VirtualMachine, ApiErro
     })
 }
 
-fn state_label(state: sys::virDomainState) -> &'static str {
+pub(crate) fn state_label(state: sys::virDomainState) -> &'static str {
     match state {
         sys::VIR_DOMAIN_RUNNING | sys::VIR_DOMAIN_BLOCKED => "running",
         sys::VIR_DOMAIN_PAUSED | sys::VIR_DOMAIN_PMSUSPENDED => "paused",

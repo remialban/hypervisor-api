@@ -1,0 +1,19 @@
+meta {
+  name: Start instance
+  type: http
+  seq: 17
+}
+
+post {
+  url: {{baseUrl}}{{apiPrefix}}/hypervisors/{{hypervisorId}}/labs/{{labId}}/instances/{{labInstanceId}}/start
+  body: none
+  auth: inherit
+}
+
+assert {
+  res.status: eq 200
+}
+
+docs {
+  Owner, lab managers, admins. Starts every VM, routers first.
+}

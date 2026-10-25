@@ -1,0 +1,30 @@
+meta {
+  name: Add internal network (LAN)
+  type: http
+  seq: 4
+}
+
+post {
+  url: {{baseUrl}}{{apiPrefix}}/hypervisors/{{hypervisorId}}/labs/{{labId}}/networks
+  body: json
+  auth: inherit
+}
+
+body:json {
+  {
+    "name": "lan1",
+    "kind": "internal"
+  }
+}
+
+assert {
+  res.status: eq 201
+}
+
+script:post-response {
+  if (res.status === 201) { bru.setVar("labLanId", res.body.id); }
+}
+
+docs {
+  Admins and lab managers. An internal network is an isolated libvirt network, created for each instance (named lab-<instance>-<name>).
+}

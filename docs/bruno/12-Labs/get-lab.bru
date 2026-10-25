@@ -1,0 +1,19 @@
+meta {
+  name: Get lab
+  type: http
+  seq: 7
+}
+
+get {
+  url: {{baseUrl}}{{apiPrefix}}/hypervisors/{{hypervisorId}}/labs/{{labId}}
+  body: none
+  auth: inherit
+}
+
+assert {
+  res.status: eq 200
+}
+
+docs {
+  The lab with its networks and VMs (routers first, NICs in order).
+}

@@ -54,6 +54,21 @@ Les deux tournent dans Docker, chacun derrière son HAProxy en HTTPS.
   (créer des VM) ou le **gérer** (le modifier et le reconstruire), avec un nombre maximum de
   VM par personne.
 
+### Labos
+
+- Décrire un **labo** : plusieurs VM issues de templates, et plusieurs réseaux — un réseau
+  **externe** pour accéder à Internet, et des réseaux **internes** isolés.
+- Brancher chaque VM sur un ou plusieurs réseaux, dans l'ordre de ses cartes.
+- Ajouter des VM **routeurs** (OPNsense, plusieurs par labo si besoin) entre les réseaux :
+  créées et démarrées avant les autres.
+- **Déployer** le labo en **instances** : chaque instance a ses propres réseaux internes et
+  ses propres VM, qui comptent dans le quota de celui qui la déploie.
+- Démarrer, arrêter ou supprimer une instance d'un bloc, et agir sur chacune de ses VM
+  (console, démarrage, arrêt).
+- Donner des droits sur un labo à des utilisateurs ou des groupes, comme pour les
+  templates : le **déployer** (avec un nombre maximum d'instances par personne) ou le
+  **gérer**.
+
 ### Utilisateurs, groupes et droits
 
 - Connexion par mot de passe, avec des jetons JWT courts et un renouvellement automatique de

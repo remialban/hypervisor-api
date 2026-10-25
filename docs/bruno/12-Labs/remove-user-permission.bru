@@ -1,0 +1,19 @@
+meta {
+  name: Remove user permission
+  type: http
+  seq: 20
+}
+
+delete {
+  url: {{baseUrl}}{{apiPrefix}}/hypervisors/{{hypervisorId}}/labs/{{labId}}/permissions/users/{{userId}}
+  body: none
+  auth: inherit
+}
+
+assert {
+  res.status: eq 204
+}
+
+docs {
+  Admin only. The instances already deployed are kept.
+}

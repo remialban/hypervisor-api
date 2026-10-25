@@ -1,0 +1,19 @@
+meta {
+  name: Delete instance
+  type: http
+  seq: 19
+}
+
+delete {
+  url: {{baseUrl}}{{apiPrefix}}/hypervisors/{{hypervisorId}}/labs/{{labId}}/instances/{{labInstanceId}}
+  body: none
+  auth: inherit
+}
+
+assert {
+  res.status: eq 204
+}
+
+docs {
+  Owner, lab managers, admins. Powers off and deletes the VMs, their disks and the internal networks. 409 while deploying.
+}

@@ -98,6 +98,22 @@ démarrer/arrêter, rien d'autre, et ne peut pas la prêter plus loin. Un prêt 
 à la suppression de la VM, à la révocation (`DELETE …/shares/{user_id}`, par le propriétaire, un admin
 ou l'emprunteur lui-même), ou à `expires_at`.
 
+### Templates et labos
+
+Les droits sur un template ou sur un labo se donnent à un utilisateur ou à un groupe (et donc
+à tous ses membres, sous-groupes compris) :
+
+| Droit | Template | Labo |
+|---|---|---|
+| `use` | le voir et créer des VM (`max_vms` par personne) | le voir, déployer des instances (`max_instances` par personne), piloter les siennes |
+| `manage` | aussi le modifier, le reconstruire, lire les logs | aussi modifier le labo, voir et piloter toutes ses instances |
+
+Le plus généreux des droits qui s'appliquent l'emporte. Un template ou un labo
+`hypervisor` est aussi ouvert (en `use`, sans limite) à tous ceux qui ont accès à
+l'hyperviseur ; `restricted` (le défaut pour un labo), seulement par les droits. Créer,
+supprimer, changer la visibilité et donner les droits restent réservés aux admins. Le
+détail des routes est dans [API.md](API.md#templates) et [API.md](API.md#labos).
+
 ### Quotas
 
 Aucun par défaut. Un admin les fixe par utilisateur avec `PUT /api/users/{id}/quota`

@@ -248,6 +248,80 @@ renvoie `access` : `level` (`use`, `manage`, `admin`), `max_vms` et `vm_count`.
 (`null` = illimité). Quand plusieurs droits s'appliquent (le sien, ceux de ses groupes), le
 plus généreux l'emporte. Les admins ne sont pas limités.
 
+## Labos
+
+Préfixe : `/api/hypervisors/{hypervisor_id}/labs`. Un labo est un ensemble de VM issues de
+templates, branchées sur plusieurs réseaux, que l'on **déploie** en **instances**.
+
+- **Réseaux** : `external` = un réseau libvirt **existant** de l'hyperviseur (NAT ou bridge vers
+  Internet, par exemple `default`), partagé par toutes les instances ; `internal` = un réseau
+  **isolé**, créé pour chaque instance (`lab-<instance>-<nom>`).
+- **VM** : chacune vient d'un template (sa dernière version construite, ou une version
+  donnée) et a des cartes réseau **dans l'ordre** : la première est la première vue par le
+  système invité. Une VM `router` (OPNsense…) relie les réseaux : elle est créée et démarrée
+  avant les autres. L'API ne fait que le câblage ; la configuration d'OPNsense vient de son
+  template, ou se fait dans sa console.
+- **Instance** : déployer un labo crée ses réseaux internes puis ses VM. Les VM
+  appartiennent à celui qui déploie, comptent dans son quota, et les routes des VM marchent
+  dessus (console, démarrage, arrêt). Une instance se supprime d'un bloc : VM, disques et
+  réseaux internes.
+
+Droits, comme pour les templates : **admin** (tout, dont créer et supprimer un labo, sa
+visibilité et les droits) ; **`manage`** (modifier le labo, voir et piloter toutes ses
+instances) ; **`use`** (voir le labo, déployer ses instances, piloter les siennes), avec
+`max_instances` par personne. Un labo est `restricted` par défaut (seulement par les
+droits) ; `hypervisor` l'ouvre aussi à tous ceux qui ont accès à l'hyperviseur. Un
+gestionnaire ne peut mettre dans un labo que les templates qu'il a le droit d'utiliser.
+
+**Définition du labo**
+
+| Route | Qui | Rôle |
+|---|---|---|
+| `GET …/labs` | connecté | Les labos sur lesquels j'ai un droit, avec `access` (`level`, `max_instances`, `instance_count`). |
+| `POST …/labs` | admin | `{"name","description","visibility"}`. |
+| `GET …/labs/{lab_id}` | droit | Le labo, ses réseaux et ses VM (routeurs d'abord, cartes dans l'ordre). |
+| `PATCH …/labs/{lab_id}` | `manage` (visibilité : admin) | `{"name","description","visibility"}`. |
+| `DELETE …/labs/{lab_id}` | admin | `409` tant qu'il a des instances. |
+| `POST …/labs/{lab_id}/networks` | `manage` | `{"name","kind":"external","libvirt_network":"default"}` ou `{"name","kind":"internal"}`. |
+| `DELETE …/labs/{lab_id}/networks/{network_id}` | `manage` | `409` si une VM du labo ou une instance l'utilise. |
+| `POST …/labs/{lab_id}/vms` | `manage` | Ajoute une VM (voir ci-dessous). |
+| `PUT …/labs/{lab_id}/vms/{lab_vm_id}` | `manage` | Remplace la VM. Les instances déjà déployées gardent ce qu'elles ont. |
+| `DELETE …/labs/{lab_id}/vms/{lab_vm_id}` | `manage` | `409` si une instance l'a encore. |
+| `GET …/labs/{lab_id}/permissions` | admin | Les droits donnés, avec le nombre d'instances de chaque utilisateur. |
+| `PUT` / `DELETE …/permissions/users/{user_id}` | admin | `{"role": "use" \| "manage", "max_instances": 1}`. |
+| `PUT` / `DELETE …/permissions/groups/{group_id}` | admin | Pareil pour un groupe et tous ses membres, sous-groupes compris. |
+
+Corps d'une VM de labo (un OPNsense avec un WAN et un LAN) :
+
+```json
+{
+  "name": "opnsense",
+  "role": "router",
+  "template_id": "…",
+  "version": null,
+  "memory_mb": 2048,
+  "vcpus": 2,
+  "firmware": "bios",
+  "networks": ["<id du réseau wan>", "<id du réseau lan1>"]
+}
+```
+
+**Instances**
+
+| Route | Qui | Rôle |
+|---|---|---|
+| `GET …/labs/{lab_id}/instances` | droit | Mes instances ; toutes pour `manage` et admin. |
+| `POST …/labs/{lab_id}/instances` | droit | `{"name","start"}` : déploie. `202`, puis suivre l'instance jusqu'à `ready` ou `failed`. `403` si le quota ou `max_instances` est atteint ; `409` si un template n'est pas construit ou un réseau externe manque. |
+| `GET …/instances/{instance_id}` | propriétaire, `manage`, admin | État (`deploying`, `ready`, `failed` + `error`), réseaux libvirt, et chaque VM : `vm_id`, état en direct, réseaux de ses cartes dans l'ordre. |
+| `POST …/instances/{instance_id}/start` | propriétaire, `manage`, admin | Démarre toutes les VM, routeurs d'abord. |
+| `POST …/instances/{instance_id}/stop` | propriétaire, `manage`, admin | Arrêt propre de toutes les VM (routeurs en dernier) ; `?force=true` les coupe. |
+| `DELETE …/instances/{instance_id}` | propriétaire, `manage`, admin | Supprime les VM, leurs disques et les réseaux internes. `409` pendant le déploiement. |
+| `GET /api/me/lab-instances` | connecté | Toutes mes instances, sur tous les hyperviseurs. |
+
+Pour agir sur **une** VM d'une instance (console, démarrer, arrêter), utiliser les routes des
+VM avec son `vm_id`. Si le déploiement échoue, ce qu'il avait créé est supprimé et
+l'instance reste en `failed` avec la raison ; on la supprime ensuite comme les autres.
+
 ## Console (VNC)
 
 `GET /api/hypervisors/{hypervisor_id}/vms/{vm_id}/vnc` (propriétaire, emprunteur ou admin)

@@ -1,0 +1,19 @@
+meta {
+  name: Get instance
+  type: http
+  seq: 14
+}
+
+get {
+  url: {{baseUrl}}{{apiPrefix}}/hypervisors/{{hypervisorId}}/labs/{{labId}}/instances/{{labInstanceId}}
+  body: none
+  auth: inherit
+}
+
+assert {
+  res.status: eq 200
+}
+
+docs {
+  Status (deploying, ready, failed + error), the libvirt networks, and each VM with its vm_id (the VM routes work on it: console, start, stop), live status and NIC networks in order.
+}

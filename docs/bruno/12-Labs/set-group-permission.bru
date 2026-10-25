@@ -1,0 +1,26 @@
+meta {
+  name: Set group permission
+  type: http
+  seq: 11
+}
+
+put {
+  url: {{baseUrl}}{{apiPrefix}}/hypervisors/{{hypervisorId}}/labs/{{labId}}/permissions/groups/{{groupId}}
+  body: json
+  auth: inherit
+}
+
+body:json {
+  {
+    "role": "use",
+    "max_instances": 1
+  }
+}
+
+assert {
+  res.status: eq 204
+}
+
+docs {
+  Admin only. Same as for a user, for every member of the group and of its nested groups. The most generous right wins.
+}

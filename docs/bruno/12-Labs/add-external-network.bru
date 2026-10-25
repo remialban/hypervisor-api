@@ -1,0 +1,31 @@
+meta {
+  name: Add external network (WAN)
+  type: http
+  seq: 3
+}
+
+post {
+  url: {{baseUrl}}{{apiPrefix}}/hypervisors/{{hypervisorId}}/labs/{{labId}}/networks
+  body: json
+  auth: inherit
+}
+
+body:json {
+  {
+    "name": "wan",
+    "kind": "external",
+    "libvirt_network": "default"
+  }
+}
+
+assert {
+  res.status: eq 201
+}
+
+script:post-response {
+  if (res.status === 201) { bru.setVar("labWanId", res.body.id); }
+}
+
+docs {
+  Admins and lab managers. An external network is an existing libvirt network of the hypervisor (NAT or bridge to the outside), shared by every instance.
+}

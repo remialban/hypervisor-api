@@ -1,0 +1,31 @@
+meta {
+  name: Add client VM
+  type: http
+  seq: 6
+}
+
+post {
+  url: {{baseUrl}}{{apiPrefix}}/hypervisors/{{hypervisorId}}/labs/{{labId}}/vms
+  body: json
+  auth: inherit
+}
+
+body:json {
+  {
+    "name": "client1",
+    "template_id": "{{templateId}}",
+    "memory_mb": 1024,
+    "vcpus": 1,
+    "networks": [
+      "{{labLanId}}"
+    ]
+  }
+}
+
+assert {
+  res.status: eq 201
+}
+
+docs {
+  Admins and lab managers. A client on the internal network, behind the router.
+}

@@ -1,0 +1,30 @@
+meta {
+  name: Deploy instance
+  type: http
+  seq: 13
+}
+
+post {
+  url: {{baseUrl}}{{apiPrefix}}/hypervisors/{{hypervisorId}}/labs/{{labId}}/instances
+  body: json
+  auth: inherit
+}
+
+body:json {
+  {
+    "name": "tp3-groupe1",
+    "start": true
+  }
+}
+
+assert {
+  res.status: eq 202
+}
+
+script:post-response {
+  if (res.status === 202) { bru.setVar("labInstanceId", res.body.id); }
+}
+
+docs {
+  Users with a right on the lab. Creates the internal networks, then every VM from its template (routers first), owned by the caller and counted in their quota. 202: poll Get instance until status is ready or failed. 403 if the quota or max_instances is reached; 409 if a template is not built or an external network is missing.
+}

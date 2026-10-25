@@ -527,6 +527,17 @@ pub async fn delete(
             "The template is being built: stop the build first".into(),
         ));
     }
+    let used_by: Option<String> = sqlx::query_scalar(
+        "SELECT l.name FROM lab_vms v JOIN labs l ON l.id = v.lab_id WHERE v.template_id = $1 LIMIT 1",
+    )
+    .bind(&row.id)
+    .fetch_optional(&state.db)
+    .await?;
+    if let Some(lab) = used_by {
+        return Err(ApiError::Conflict(format!(
+            "The template is used by the lab {lab}: remove it from the lab first"
+        )));
+    }
     let disks: Vec<(String, String)> =
         sqlx::query_as("SELECT pool, volume FROM template_versions WHERE template_id = $1")
             .bind(&row.id)
@@ -1033,10 +1044,11 @@ pub async fn create_vm(
         vcpus: body.vcpus,
         uefi: body.firmware.as_deref() == Some("uefi"),
         start: body.start.unwrap_or(false),
-        network: body
-            .network
-            .clone()
-            .unwrap_or_else(|| vm_options::DEFAULT_NETWORK.into()),
+        networks: vec![
+            body.network
+                .clone()
+                .unwrap_or_else(|| vm_options::DEFAULT_NETWORK.into()),
+        ],
         pool: version.pool.clone(),
         template_volume: version.volume.clone(),
         vnc_listen: vm_create::vnc_listen()?,
@@ -1144,6 +1156,21 @@ async fn find_template(
         .await?
         .ok_or_else(not_found)?;
     Ok((row, rights))
+}
+
+/// Whether the caller may use the template (any right on it, or admin): what a lab manager
+/// needs to put it in a lab.
+pub(crate) async fn can_use(
+    state: &SharedState,
+    user: &AuthUser,
+    hypervisor_id: &str,
+    template_id: &str,
+) -> Result<bool, ApiError> {
+    match find_template(state, user, hypervisor_id, template_id).await {
+        Ok(_) => Ok(true),
+        Err(ApiError::NotFound(_)) => Ok(false),
+        Err(error) => Err(error),
+    }
 }
 
 /// `all`: every build (managers); otherwise only the built versions.
@@ -2247,7 +2274,7 @@ async fn fail_interrupted(state: &SharedState) -> Result<(), ApiError> {
 // ---------- libvirt (blocking) ----------
 
 /// libvirt is blocking: run it on a dedicated thread so the async runtime is not stalled.
-async fn blocking<T, F>(job: F) -> Result<T, ApiError>
+pub(crate) async fn blocking<T, F>(job: F) -> Result<T, ApiError>
 where
     F: FnOnce() -> Result<T, ApiError> + Send + 'static,
     T: Send + 'static,
@@ -2297,7 +2324,7 @@ fn register_volume(uri: &str, pool: &str, volume: &str) -> Result<i64, ApiError>
     Ok(volume.get_info()?.capacity.div_ceil(GIB) as i64)
 }
 
-fn delete_volume(uri: &str, pool: &str, volume: &str) -> Result<(), ApiError> {
+pub(crate) fn delete_volume(uri: &str, pool: &str, volume: &str) -> Result<(), ApiError> {
     let conn = Connect::open(Some(uri))?;
     let volume = match StoragePool::lookup_by_name(&conn, pool)
         .and_then(|pool| StorageVol::lookup_by_name(&pool, volume))
@@ -2323,35 +2350,40 @@ fn delete_volume(uri: &str, pool: &str, volume: &str) -> Result<(), ApiError> {
 }
 
 /// A VM to create from a template version, checked by `check_new_vm`.
-struct NewVm {
-    uri: String,
-    name: String,
-    memory_mb: u64,
-    vcpus: u64,
-    uefi: bool,
-    start: bool,
-    network: String,
-    pool: String,
-    template_volume: String,
-    vnc_listen: String,
+pub(crate) struct NewVm {
+    pub(crate) uri: String,
+    pub(crate) name: String,
+    pub(crate) memory_mb: u64,
+    pub(crate) vcpus: u64,
+    pub(crate) uefi: bool,
+    pub(crate) start: bool,
+    /// One NIC per network, in this order.
+    pub(crate) networks: Vec<String>,
+    pub(crate) pool: String,
+    pub(crate) template_volume: String,
+    pub(crate) vnc_listen: String,
 }
 
 impl NewVm {
-    fn disk_volume(&self) -> String {
+    pub(crate) fn disk_volume(&self) -> String {
         format!("{}.qcow2", self.name)
     }
 }
 
 /// Checks everything the creation depends on, without changing anything.
-fn check_new_vm(vm: &NewVm) -> Result<(), ApiError> {
+pub(crate) fn check_new_vm(vm: &NewVm) -> Result<(), ApiError> {
     let conn = Connect::open(Some(&vm.uri))?;
     if Domain::lookup_by_name(&conn, &vm.name).is_ok() {
         return Err(ApiError::Conflict(
             "A VM with this name already exists".into(),
         ));
     }
-    if !Network::lookup_by_name(&conn, &vm.network)?.is_active()? {
-        return Err(ApiError::Conflict("The network is not active".into()));
+    for network in &vm.networks {
+        if !Network::lookup_by_name(&conn, network)?.is_active()? {
+            return Err(ApiError::Conflict(format!(
+                "The network {network} is not active"
+            )));
+        }
     }
     let pool = active_pool(&conn, &vm.pool)?;
     if !volume_exists(&pool, &vm.template_volume)? {
@@ -2371,7 +2403,7 @@ fn check_new_vm(vm: &NewVm) -> Result<(), ApiError> {
 
 /// Copies the template disk and defines the VM on it. Slow: the whole disk is copied.
 /// Nothing is left behind if a step fails. Returns the UUID of the new VM.
-fn define_from_template(vm: &NewVm) -> Result<String, ApiError> {
+pub(crate) fn define_from_template(vm: &NewVm) -> Result<String, ApiError> {
     let conn = Connect::open(Some(&vm.uri))?;
     let pool = active_pool(&conn, &vm.pool)?;
     let source = StorageVol::lookup_by_name(&pool, &vm.template_volume)?;
@@ -2405,7 +2437,7 @@ fn define_on_disk(
             format: format.to_owned(),
         }],
         iso_path: None,
-        network: vm.network.clone(),
+        networks: vm.networks.clone(),
         vnc_listen: vm.vnc_listen.clone(),
     };
     let domain = Domain::define_xml(conn, &vm_xml::new_domain_xml(&spec)?)?;
