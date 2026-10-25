@@ -6,12 +6,12 @@ son conteneur :
 
 | Conteneur HAProxy | HTTP (redirigé) | HTTPS | Envoie vers |
 |---|---|---|---|
-| `hypervisor-api-haproxy` | `API_HTTP_PORT` (8081) | `API_HTTPS_PORT` (8443), et `:8000` interne pour le front | `api:3000` : API, Swagger, OpenAPI |
+| `hypervisor-api-haproxy` | `API_HTTP_PORT` (8081) | `API_HTTPS_PORT` (8443), et `:9443` interne pour le front | `api:3000` : API, Swagger, OpenAPI |
 | `hypervisor-novnc-haproxy` | `NOVNC_HTTP_PORT` (6081) | `NOVNC_HTTPS_PORT` (6443) | `novnc:6080` : pages noVNC et WebSocket des consoles |
 
 Les ports 80 et 443 sont laissés au troisième HAProxy, celui du frontend (dépôt
 `hypervisor-ui`), qui sert l'application. Son nginx relaie `/api` vers le HAProxy de
-l'API, sur une entrée HTTP interne (`api-haproxy:8000`, non publiée) : toutes les requêtes
+l'API, sur une entrée HTTPS interne (`api-haproxy:9443`, non publiée) : toutes les requêtes
 vers l'API passent donc par `hypervisor-api-haproxy`. Le schéma d'ensemble est dans [DOCKER.md](DOCKER.md).
 
 Le port HTTP de chaque HAProxy ne sert qu'à rediriger vers son port HTTPS.
@@ -134,7 +134,7 @@ NOVNC_URL=https://kvm.example.com:6443/vnc.html
 `NOVNC_URL` doit être en `https://`, sur le port `NOVNC_HTTPS_PORT`, et utiliser le nom du
 certificat. noVNC ouvre alors la console en `wss://` (WebSocket chiffré) sur la même adresse.
 
-Le frontend appelle l'API par son propre nginx (qui relaie vers `api-haproxy:8000`), sur sa
+Le frontend appelle l'API par son propre nginx (qui relaie vers `api-haproxy:9443`), sur sa
 propre origine : laissez
 `CORS_ALLOWED_ORIGINS` vide. Ne le remplissez (en `https://`) que pour un front servi
 ailleurs qui appellerait l'API directement sur le port 8443.

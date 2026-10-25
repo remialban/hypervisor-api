@@ -102,7 +102,7 @@ services:
 
   # Seule entrée de l'API (voir docs/HAPROXY.md) :
   #   - HTTPS publié (API_HTTPS_PORT) pour Swagger, Bruno, scripts ; HTTP redirigé vers HTTPS ;
-  #   - HTTP sur le port 8000, non publié, pour le nginx du front (réseau Docker seulement).
+  #   - HTTPS sur le port 9443, non publié, pour le nginx du front (réseau Docker seulement).
   api-haproxy:
     image: haproxy:3.0-alpine
     container_name: hypervisor-api-haproxy
@@ -111,10 +111,10 @@ services:
     ports:
       - "${API_HTTP_PORT:-8081}:8080"
       - "${API_HTTPS_PORT:-8443}:8443"
-    # Entrée du front (API_UPSTREAM=http://api-haproxy:8000) : joignable sur le réseau Docker,
+    # Entrée du front (API_UPSTREAM=https://api-haproxy:9443) : joignable sur le réseau Docker,
     # jamais publiée sur la machine.
     expose:
-      - "8000"
+      - "9443"
     environment:
       # Pour la redirection HTTP -> HTTPS.
       HTTPS_PORT: ${API_HTTPS_PORT:-8443}

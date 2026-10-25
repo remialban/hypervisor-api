@@ -21,7 +21,7 @@ Pour les commandes d'installation pas à pas, voir [INSTALLATION.md](../INSTALLA
 
 - **Un réseau Docker relie les deux projets** : celui de l'API,
   `hypervisor-api_hypervisor-net`. Le conteneur du front s'y branche pour joindre le
-  **HAProxy de l'API** sur son entrée interne `api-haproxy:8000` (non publiée) : toutes les
+  **HAProxy de l'API** sur son entrée interne `api-haproxy:9443` (non publiée) : toutes les
   requêtes vers l'API, celles du front comme celles de Swagger, passent par lui.
 - **Rien d'autre n'est publié** : ni noVNC, ni nginx. L'API n'est ouverte que sur
   `127.0.0.1:3000`, pour les outils locaux (Bruno, curl).
@@ -47,7 +47,7 @@ flowchart TB
             direction TB
             subgraph apinet["🔗 Réseau hypervisor-api_hypervisor-net"]
                 direction LR
-                apihap["<b>hypervisor-api-haproxy</b><br/>haproxy:3.0-alpine<br/>:8080 redirige · :8443 TLS<br/>:8000 interne (front)"]
+                apihap["<b>hypervisor-api-haproxy</b><br/>haproxy:3.0-alpine<br/>:8080 redirige · :8443 TLS<br/>:9443 TLS interne (front)"]
                 api["<b>hypervisor-api</b><br/>API Rust · Axum<br/>:3000"]
                 novnchap["<b>hypervisor-novnc-haproxy</b><br/>haproxy:3.0-alpine<br/>:8080 redirige · :8443 TLS"]
                 novnc["<b>hypervisor-novnc</b><br/>noVNC + websockify<br/>:6080"]
@@ -71,7 +71,7 @@ flowchart TB
     browser -- "Swagger, Bruno<br/>HTTPS :8443 (HTTP :8081 → 301)" --> apihap
     browser -- "consoles<br/>HTTPS :6443 (HTTP :6081 → 301)" --> novnchap
     uihap -- "HTTP" --> ui
-    ui -- "/api · /ping · /swagger-ui · /api-docs<br/>HTTP :8000 (réseau de l'API)" --> apihap
+    ui -- "/api · /ping · /swagger-ui · /api-docs<br/>HTTPS :9443 (réseau de l'API)" --> apihap
     apihap -- "tout" --> api
     novnchap -- "/vnc.html · /websockify<br/>WebSocket" --> novnc
     api --- db
@@ -94,7 +94,7 @@ flowchart TB
 ```
 
 Le conteneur `hypervisor-ui` est branché sur **deux** réseaux : `edge` (avec le HAProxy du
-front) et celui de l'API (pour joindre `api-haproxy:8000`). Il ne parle jamais au conteneur
+front) et celui de l'API (pour joindre `api-haproxy:9443`). Il ne parle jamais au conteneur
 `api` directement.
 
 ## Les conteneurs
@@ -122,13 +122,14 @@ pour ouvrir un port inférieur à 1024.
 - **`hypervisor-ui`**. nginx sert l'application Angular compilée. Il renvoie `index.html`
   pour les routes Angular et met les fichiers `.js` et `.css` en cache un an. Il relaie
   `/api/…`, `/ping`, `/swagger-ui…` et `/api-docs/…` vers `API_UPSTREAM`
-  (`http://api-haproxy:8000`), en transmettant l'adresse du navigateur dans
+  (`https://api-haproxy:9443`), en transmettant l'adresse du navigateur dans
   `X-Forwarded-For`.
 - **`hypervisor-api-haproxy`** ([haproxy/common.cfg](../haproxy/common.cfg) +
   [haproxy/api.cfg](../haproxy/api.cfg)). C'est la **seule entrée** de l'API, qui envoie
   tout à `api:3000` :
   - `:8443` (HTTPS, publié) pour Swagger, Bruno, scripts ;
-  - `:8000` (HTTP, **non publié**) pour le nginx du front, sur le réseau Docker. Sur ce
+  - `:9443` (HTTPS, **non publié**) pour le nginx du front, sur le réseau Docker. nginx
+    vérifie son certificat (`API_CA_PATH`, `API_TLS_NAME` dans le `.env` du front). Sur ce
     port seulement, il prend l'adresse du client dans `X-Forwarded-For` : la limite sur
     `/api/auth/…` (20 requêtes / 10 s) compte donc par navigateur, et non pour tout le
     front d'un bloc.
@@ -165,7 +166,7 @@ Ce qu'il faut retenir :
   est cloné dans un dossier qui ne s'appelle pas `hypervisor-api`, il faut changer
   `API_NETWORK` dans le `.env` du front.
 - **Le nom `api-haproxy` se résout par le DNS de Docker** (`127.0.0.11`) dans ce réseau.
-  C'est le nom du service dans le Compose de l'API : `API_UPSTREAM=http://api-haproxy:8000`.
+  C'est le nom du service dans le Compose de l'API : `API_UPSTREAM=https://api-haproxy:9443`.
 - **Le HAProxy du front appelle l'API à travers le HAProxy de l'API** (par nginx). Le HAProxy
   de noVNC, lui, n'est lié à aucun autre.
 
@@ -202,7 +203,7 @@ sequenceDiagram
     participant N as 🧑‍💻 Navigateur
     participant H as hypervisor-ui-haproxy<br/>:443
     participant U as hypervisor-ui<br/>nginx :8080
-    participant P as hypervisor-api-haproxy<br/>:8000
+    participant P as hypervisor-api-haproxy<br/>:9443
     participant A as hypervisor-api<br/>:3000
     participant K as Hyperviseur<br/>libvirtd
 
@@ -279,7 +280,9 @@ Packer) et les ports **5900-5999** (VNC des VM, pour noVNC).
 | Variable | Fichier | Valeur | Pourquoi |
 |---|---|---|---|
 | `API_NETWORK` | `.env` du front | `hypervisor-api_hypervisor-net` | le réseau de l'API auquel le front se branche |
-| `API_UPSTREAM` | `.env` du front | `http://api-haproxy:8000` | où nginx relaie `/api` : le HAProxy de l'API |
+| `API_UPSTREAM` | `.env` du front | `https://api-haproxy:9443` | où nginx relaie `/api` : le HAProxy de l'API |
+| `API_CA_PATH` | `.env` du front | `../hypervisor-api/tls/cert.pem` (auto-signé) ou `/etc/ssl/certs/ca-certificates.crt` (Let's Encrypt) | ce à quoi nginx fait confiance pour le certificat de l'API |
+| `API_TLS_NAME` | `.env` du front | `localhost`, ou le domaine du certificat | le nom que nginx vérifie dans le certificat de l'API |
 | `HTTP_PORT` / `HTTPS_PORT` | `.env` du front | `80` / `443` | les ports du front |
 | `API_*_PORT`, `NOVNC_*_PORT` | `.env` de l'API | `8081`/`8443`, `6081`/`6443` | ne pas entrer en conflit avec les ports du front |
 | `NOVNC_URL` | `.env` de l'API | `https://<serveur>:6443/vnc.html` | l'adresse des consoles donnée au navigateur : le HAProxy de noVNC |
@@ -327,16 +330,18 @@ docker compose -f docker-compose.yml -f docker-compose.mock.yml up -d --build
   nginx transmet l'adresse du navigateur, donc les utilisateurs ne se gênent pas entre eux.
   L'API, elle, bloque un compte 15 minutes après 5 mots de passe faux, quel que soit le
   chemin.
-- **Le port 8000 du HAProxy de l'API fait confiance à `X-Forwarded-For`.** C'est sans risque
+- **Le port 9443 du HAProxy de l'API fait confiance à `X-Forwarded-For`.** C'est sans risque
   tant qu'il n'est pas publié : seul nginx, sur le réseau Docker, peut l'atteindre. Ne
   l'ajoutez jamais aux `ports:`.
-- **À l'intérieur de Docker, le trafic est en HTTP clair** (HAProxy → nginx → HAProxy de
-  l'API → API, HAProxy → noVNC). Il ne quitte pas la machine. Le TLS s'arrête à chaque HAProxy.
+- **Le trafic entre conteneurs** : chiffré de nginx au HAProxy de l'API (`:9443`, certificat
+  vérifié). Restent en HTTP clair, sans quitter la machine : HAProxy du front → nginx,
+  HAProxy de l'API → API, HAProxy de noVNC → noVNC. Le TLS du navigateur s'arrête à chaque
+  HAProxy.
 - **Le trajet noVNC → hyperviseur n'est pas chiffré, et le port VNC des VM n'a pas de mot de
   passe.** Filtrez les ports 5900-5999 de l'hyperviseur pour qu'ils ne soient joignables que
   depuis la machine Docker (voir [HAPROXY.md](HAPROXY.md#ce-que-haproxy-ne-couvre-pas)).
 - **Ne branchez sur le réseau de l'API que les conteneurs de ces deux projets.** Un autre
   conteneur portant l'alias `api-haproxy` pourrait être joint par nginx à la place, et tout
-  conteneur de ce réseau peut atteindre le port 8000.
+  conteneur de ce réseau peut atteindre le port 9443.
 - **Le HAProxy de l'API est indispensable** : s'il est arrêté, l'application ne joint plus
   l'API (nginx répond `502`).

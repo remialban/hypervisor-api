@@ -4,9 +4,10 @@ Ce guide explique comment faire tourner l'API, de deux façons :
 
 - **[Option 1 — Développement](#option-1--développement)** : l'API lancée avec `cargo run`
   sur votre machine, pour modifier le code et le tester ;
-- **[Option 2 — Installation avec Docker](#option-2--installation-avec-docker)** : l'API,
-  noVNC et HAProxy (HTTPS) lancés avec Docker Compose, pour l'utiliser au quotidien ou la
-  déployer sur un serveur.
+- **[Option 2 — Installation avec Docker](#option-2--installation-avec-docker)** : toute
+  l'application avec Docker Compose (l'API, les consoles noVNC et le frontend `hypervisor-ui`,
+  derrière trois HAProxy en HTTPS), pour l'utiliser au quotidien ou la déployer sur un
+  serveur.
 
 Dans les deux cas, l'API pilote des hyperviseurs KVM via libvirt. La
 [dernière partie](#préparer-un-hyperviseur) explique comment préparer un hyperviseur.
@@ -154,76 +155,108 @@ Le détail de l'authentification (rôles, quotas, branchement du front) est dans
 
 ## Option 2 — Installation avec Docker
 
-Docker Compose lance quatre conteneurs :
+Cette option installe **toute l'application** sur une machine : l'API, les consoles noVNC
+et le frontend Angular. Elle utilise deux dépôts, chacun avec son `docker-compose.yml` :
 
-| Conteneur | Rôle | Accès |
-|---|---|---|
-| `api-haproxy` | Entrée HTTPS de l'API (Swagger, Bruno, scripts) | `8443` (HTTPS), `8081` (redirigé vers HTTPS) |
-| `novnc-haproxy` | Entrée HTTPS des consoles | `6443` (HTTPS), `6081` (redirigé vers HTTPS) |
-| `api` | L'API | `127.0.0.1:3000` seulement (outils locaux) |
-| `novnc` | noVNC et websockify | aucun port publié : uniquement via `novnc-haproxy` |
+- `hypervisor-api` (ce dépôt) : l'API et noVNC ;
+- `hypervisor-ui` : le frontend.
 
-Les ports 80 et 443 sont laissés au frontend (`hypervisor-ui`), qui a son propre HAProxy et
-appelle l'API à travers `api-haproxy` (entrée interne `:8000`, sur le réseau Docker). Le détail des HAProxy est dans
-[docs/HAPROXY.md](docs/HAPROXY.md).
-Le fonctionnement avec le frontend (`hypervisor-ui`), avec schémas des conteneurs, ports et
-réseaux, est dans [docs/DOCKER.md](docs/DOCKER.md).
+Au total, six conteneurs tournent :
+
+| Conteneur | Dépôt | Rôle | Ports sur la machine |
+|---|---|---|---|
+| `hypervisor-ui-haproxy` | ui | Entrée HTTPS de **l'application** | `443` (HTTPS), `80` (redirigé) |
+| `hypervisor-ui` | ui | nginx : sert l'application, relaie `/api` vers `api-haproxy` | aucun |
+| `hypervisor-api-haproxy` | api | Entrée HTTPS de l'API : pour le front (interne `:9443`), Swagger, Bruno | `8443` (HTTPS), `8081` (redirigé) |
+| `hypervisor-api` | api | L'API Rust | `127.0.0.1:3000` seulement |
+| `hypervisor-novnc-haproxy` | api | Entrée HTTPS des **consoles** | `6443` (HTTPS), `6081` (redirigé) |
+| `hypervisor-novnc` | api | noVNC et websockify | aucun |
+
+Le fonctionnement détaillé (réseaux, volumes, chemin des requêtes, schémas) est dans
+[docs/DOCKER.md](docs/DOCKER.md), et celui des HAProxy dans [docs/HAPROXY.md](docs/HAPROXY.md).
 
 ### 1. Prérequis
 
-- Docker Engine et le plugin Docker Compose v2 (`docker compose version`).
-- Sur la machine Docker : une clé SSH qui ouvre une session sur vos hyperviseurs, et un
-  fichier `~/.ssh/known_hosts` qui les connaît (voir
-  [Préparer un hyperviseur](#préparer-un-hyperviseur)).
+- Docker Engine et le plugin Docker Compose v2.24 ou plus récent (`docker compose version`).
+- `git` et `openssl`.
+- Les ports **80, 443, 8081, 8443, 6081 et 6443** libres sur la machine.
+- Une clé SSH qui ouvre une session sur vos hyperviseurs, et un fichier `~/.ssh/known_hosts`
+  qui les connaît (voir [Préparer un hyperviseur](#préparer-un-hyperviseur)).
 - Pour un hyperviseur local : libvirt installé sur la machine Docker (le socket
   `/var/run/libvirt/libvirt-sock` est monté dans l'API).
 
-### 2. Le certificat HTTPS
+### 2. Récupérer les deux dépôts
 
-Les deux HAProxy partagent un certificat et sa clé privée, en PEM, dans **deux fichiers**.
-La clé doit être lisible par l'UID 99 (l'utilisateur de HAProxy dans son conteneur).
-
-**Pour un essai ou un réseau local**, un certificat auto-signé suffit. Mettez dans
-`subjectAltName` les noms et adresses par lesquels les navigateurs joindront le serveur :
+Clonez-les **côte à côte**, dans le même dossier, en gardant leur nom :
 
 ```bash
+mkdir -p ~/hypervisor && cd ~/hypervisor
+git clone git@github.com:remialban/hypervisor-api.git
+git clone git@github.com:tkdev1755/hypervisor-ui.git
+```
+
+```text
+~/hypervisor/
+├── hypervisor-api/    API + noVNC
+└── hypervisor-ui/     frontend
+```
+
+Le nom du dossier `hypervisor-api` compte : Docker en tire le nom du réseau que le front
+rejoint (`hypervisor-api_hypervisor-net`). Avec un autre nom, changez `API_NETWORK` à
+l'étape 5.
+
+### 3. Le certificat HTTPS
+
+Un seul certificat sert aux trois HAProxy. Il est aussi celui que nginx vérifie quand il
+appelle l'API. Créez-le une fois, dans `hypervisor-api/tls/`.
+
+**Pour un essai ou un réseau local**, un certificat auto-signé suffit. Mettez dans
+`subjectAltName` **`localhost`**, plus chaque nom et adresse par lesquels les navigateurs
+joindront le serveur (ici `kvm.local` et `192.168.1.10`, à adapter) :
+
+```bash
+cd ~/hypervisor/hypervisor-api
 mkdir -p tls
 openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 365 \
   -subj "/CN=kvm.local" \
   -addext "subjectAltName=DNS:localhost,DNS:kvm.local,IP:127.0.0.1,IP:192.168.1.10" \
   -keyout tls/key.pem -out tls/cert.pem
 sudo chown 99:99 tls/key.pem && sudo chmod 400 tls/key.pem
+chmod 644 tls/cert.pem
 ```
 
-Le dossier `tls/` est ignoré par git et par Docker : la clé ne finit ni dans un commit ni
-dans une image.
+- La clé doit être lisible par l'UID 99 : c'est l'utilisateur de HAProxy dans les conteneurs.
+- `tls/` est ignoré par git et par Docker : la clé ne finit ni dans un commit ni dans une
+  image.
+- Pour la supprimer plus tard, il faudra `sudo`.
 
 **Pour un accès public**, utilisez un vrai certificat (Let's Encrypt…) : voir
 [docs/HAPROXY.md](docs/HAPROXY.md#avec-un-certificat-existant-lets-encrypt-autorité-interne).
 
-### 3. Le fichier `.env`
+### 4. Configurer l'API et noVNC
 
 ```bash
+cd ~/hypervisor/hypervisor-api
 cp .env.example .env
 ```
 
-Puis **remplacez toutes les valeurs d'exemple**. Un chemin d'exemple laissé tel quel
-(`/home/user/…`, `/etc/hypervisor-api/…`) fait échouer le démarrage avec
+Puis éditez `.env` et **remplacez toutes les valeurs d'exemple**. Un chemin d'exemple laissé
+tel quel (`/home/user/…`, `/etc/hypervisor-api/…`) fait échouer le démarrage avec
 `bind source path does not exist`.
 
 ```dotenv
-# Images (laissez tel quel si vous construisez avec --build)
+# Images (laissez tel quel : elles sont construites avec --build)
 DOCKERHUB_USERNAME=remi
 TAG=latest
 
-# Clé SSH vers les hyperviseurs : le chemin réel, sur la machine Docker
+# Clé SSH vers les hyperviseurs : le chemin réel, sur cette machine
 SSH_PRIVATE_KEY_HOST_PATH=/home/<vous>/.ssh/id_ed25519
 
-# HTTPS
+# Certificat créé à l'étape 3
 TLS_CERT_PATH=./tls/cert.pem
 TLS_KEY_PATH=./tls/key.pem
 
-# Ports publiés : 80 et 443 sont laissés au frontend
+# Ports des HAProxy de l'API et de noVNC (80 et 443 sont pour le frontend)
 API_HTTP_PORT=8081
 API_HTTPS_PORT=8443
 NOVNC_HTTP_PORT=6081
@@ -238,84 +271,161 @@ JWT_SECRET=<résultat de : openssl rand -base64 48>
 ADMIN_USERNAME=admin
 ADMIN_PASSWORD=<mot de passe du premier administrateur>
 
-# Vide : le frontend appelle l'API par son propre nginx (→ api-haproxy:8000), sur sa propre origine
+# Vide : le frontend appelle l'API par son propre nginx, sur sa propre origine
 CORS_ALLOWED_ORIGINS=
 ```
 
 `ADMIN_USERNAME` et `ADMIN_PASSWORD` ne servent qu'au tout premier démarrage, quand la base
-est vide. Changez ensuite le mot de passe avec `PUT /api/me/password`.
+est vide. Changez ensuite le mot de passe depuis l'application (ou `PUT /api/me/password`).
 
-### 4. Démarrer
+### 5. Configurer le frontend
 
 ```bash
+cd ~/hypervisor/hypervisor-ui
+cp .env.example .env
+```
+
+Puis éditez `.env`. Le front réutilise le certificat de l'étape 3 :
+
+```dotenv
+# Image du front (construite avec --build)
+TAG=latest
+
+# HTTPS de l'application : le même certificat que l'API
+TLS_CERT_PATH=../hypervisor-api/tls/cert.pem
+TLS_KEY_PATH=../hypervisor-api/tls/key.pem
+HTTP_PORT=80
+HTTPS_PORT=443
+
+# Lien avec l'API
+API_NETWORK=hypervisor-api_hypervisor-net
+API_UPSTREAM=https://api-haproxy:9443
+# Ce à quoi nginx fait confiance pour le certificat de l'API, et le nom qu'il y vérifie.
+# Auto-signé : le certificat lui-même, et localhost (présent dans le certificat).
+# Let's Encrypt : /etc/ssl/certs/ca-certificates.crt, et votre domaine.
+API_CA_PATH=../hypervisor-api/tls/cert.pem
+API_TLS_NAME=localhost
+```
+
+Les variables `MOCK_FULL` et `PUBLIC_URL` ne servent qu'à la fausse API : laissez-les.
+
+### 6. Démarrer
+
+**L'ordre compte** : l'API d'abord. Elle crée le réseau que le front rejoint, et nginx a
+besoin de `api-haproxy` pour démarrer.
+
+```bash
+# 1. L'API et noVNC
+cd ~/hypervisor/hypervisor-api
 docker compose up -d --build --remove-orphans
-docker compose ps
+
+# 2. Le frontend
+cd ~/hypervisor/hypervisor-ui
+docker compose up -d --build
+
+# Les six conteneurs doivent être « Up »
+docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
 ```
 
-Les quatre conteneurs doivent être `Up`. `--build` construit les images de l'API et de noVNC
-depuis le code ; sans lui, Compose peut prendre une image plus ancienne.
+La première construction prend plusieurs minutes (compilation Rust et Angular). `--build`
+construit les images depuis le code ; sans lui, Compose peut prendre une image plus ancienne.
 
-### 5. Vérifier
+### 7. Vérifier
+
+Depuis la machine (`--cacert` n'est utile qu'avec le certificat auto-signé) :
 
 ```bash
-curl --cacert tls/cert.pem https://localhost:8443/ping            # {"status":"ok","content":"pong"}
-curl -I http://localhost:8081/ping                               # 301 vers https://…:8443
+cd ~/hypervisor/hypervisor-api
+curl --cacert tls/cert.pem https://localhost/ping          # application → API : {"status":"ok",…}
+curl --cacert tls/cert.pem https://localhost:8443/ping     # API en direct : {"status":"ok",…}
 curl --cacert tls/cert.pem -o /dev/null -w '%{http_code}\n' https://localhost:6443/vnc.html   # 200
+curl -I http://localhost/                                  # 301 vers https://
 ```
 
-(`--cacert` n'est utile qu'avec le certificat auto-signé.)
+Puis dans le navigateur, avec le certificat auto-signé, **acceptez l'avertissement sur les
+trois adresses**, une fois chacune. Chaque port est une origine différente, et une console
+reste vide tant que le certificat n'a pas été accepté sur le port 6443.
 
-Dans le navigateur :
+| Adresse | Ce qu'on y trouve |
+|---|---|
+| `https://<serveur>` | **l'application** |
+| `https://<serveur>:6443/vnc.html` | noVNC (les consoles s'ouvrent depuis l'application) |
+| `https://<serveur>:8443/swagger-ui/` | Swagger, pour tester l'API |
 
-- Swagger : `https://<serveur>:8443/swagger-ui/` ;
-- consoles : la `novnc_url` renvoyée par `GET /api/hypervisors/{id}/vms/{vm_id}/vnc`
-  (`https://<serveur>:6443/vnc.html?…`) ;
-- l'application : `https://<serveur>`, une fois le frontend lancé (voir
-  [docs/DOCKER.md](docs/DOCKER.md#démarrer-arrêter)).
+Pour ne plus avoir d'avertissement, importez `hypervisor-api/tls/cert.pem` comme autorité de
+confiance dans le navigateur ou le système.
 
-Avec le certificat auto-signé, le navigateur affiche un avertissement **sur chaque port** :
-acceptez-le sur 8443 et sur 6443 (sinon les consoles restent vides), ou importez
-`tls/cert.pem` comme autorité de confiance.
+### 8. Premiers pas
 
-Connectez-vous avec `POST /api/auth/login`, puis ajoutez vos hyperviseurs comme dans
-l'[option 1](#3-se-connecter-et-ajouter-un-hyperviseur), en remplaçant
-`http://127.0.0.1:3000` par `https://<serveur>:8443`.
+1. Ouvrez `https://<serveur>` et connectez-vous avec `ADMIN_USERNAME` / `ADMIN_PASSWORD`.
+2. Changez le mot de passe de l'administrateur.
+3. Ajoutez un hyperviseur : `qemu:///system` pour la machine elle-même, ou
+   `qemu+ssh://utilisateur@adresse/system` pour un hyperviseur distant (voir
+   [Préparer un hyperviseur](#préparer-un-hyperviseur)).
+4. Créez des comptes et des groupes, donnez-leur accès aux hyperviseurs ou aux templates.
+5. Ouvrez la console d'une VM : elle s'affiche par noVNC, sur le port 6443.
 
-### 6. Exploitation
+### 9. Exploitation
+
+**Logs** :
 
 ```bash
-docker compose logs -f              # tous les logs
-docker compose logs -f api-haproxy novnc-haproxy   # une ligne par requête, avec le code
-docker compose restart api-haproxy novnc-haproxy   # après un changement de certificat
-docker compose down                 # arrêter (les données restent)
+cd ~/hypervisor/hypervisor-api
+docker compose logs -f api                          # l'API
+docker compose logs -f api-haproxy novnc-haproxy    # une ligne par requête, avec le code
+cd ~/hypervisor/hypervisor-ui
+docker compose logs -f                              # HAProxy et nginx du front
 ```
+
+**Changer de certificat** : remplacez les fichiers, puis redémarrez les trois HAProxy, ainsi
+que nginx qui vérifie le certificat de l'API :
+
+```bash
+(cd ~/hypervisor/hypervisor-api && docker compose restart api-haproxy novnc-haproxy)
+(cd ~/hypervisor/hypervisor-ui && docker compose restart)
+```
+
+**Arrêter** : dans l'ordre inverse du démarrage. Docker refuse de supprimer le réseau de
+l'API tant que le front y est branché.
+
+```bash
+(cd ~/hypervisor/hypervisor-ui && docker compose down)
+(cd ~/hypervisor/hypervisor-api && docker compose down)
+```
+
+Les données restent : `down` ne supprime ni `./data` ni le volume des jetons.
 
 **Mettre à jour** :
 
 ```bash
-git pull
-docker compose up -d --build --remove-orphans
+(cd ~/hypervisor/hypervisor-api && git pull && docker compose up -d --build --remove-orphans)
+(cd ~/hypervisor/hypervisor-ui && git pull && docker compose up -d --build)
 ```
 
 Les migrations de la base s'appliquent toutes seules au démarrage de l'API.
 
-**Sauvegarder** : `./data/api.db` contient les comptes, les groupes, les droits, les
-propriétaires des VM, les templates et le journal d'audit. Les VM et leurs disques sont, eux,
-sur les hyperviseurs. Changer `JWT_SECRET` déconnecte tout le monde mais ne perd rien.
+**Sauvegarder** : `hypervisor-api/data/api.db` contient les comptes, les groupes, les droits,
+les propriétaires des VM, les templates et le journal d'audit. Les VM et leurs disques sont,
+eux, sur les hyperviseurs. Le front ne garde aucune donnée. Changer `JWT_SECRET` déconnecte
+tout le monde mais ne perd rien.
 
-### 7. Problèmes courants
+### 10. Problèmes courants
 
 | Symptôme | Cause et solution |
 |---|---|
-| `bind source path does not exist` | Un chemin du `.env` (`TLS_CERT_PATH`, `TLS_KEY_PATH`, `SSH_PRIVATE_KEY_HOST_PATH`) n'existe pas sur la machine Docker. |
+| `bind source path does not exist` | Un chemin d'un `.env` (`TLS_*`, `API_CA_PATH`, `SSH_PRIVATE_KEY_HOST_PATH`) n'existe pas. Les chemins relatifs partent du dossier du `docker-compose.yml`. |
+| Front : `network hypervisor-api_hypervisor-net … not found` | L'API n'est pas lancée, ou son dossier ne s'appelle pas `hypervisor-api` : lancez-la d'abord, ou corrigez `API_NETWORK`. |
+| Front : `host not found in upstream "api-haproxy"`, nginx redémarre en boucle | `hypervisor-api-haproxy` n'est pas lancé : démarrez l'API, puis `docker compose restart` dans `hypervisor-ui`. |
+| L'application affiche une erreur `502` | nginx ne joint pas l'API. Avec `upstream SSL certificate verify error` dans `docker compose logs ui` : `API_TLS_NAME` n'est pas dans le certificat, ou `API_CA_PATH` n'est pas le bon fichier. Sinon : `hypervisor-api-haproxy` ou `hypervisor-api` est arrêté. |
 | `checking context: no permission to read …` pendant le build | Un fichier illisible est dans le dossier du projet hors de `tls/` : déplacez-le, ou ajoutez-le à `.dockerignore`. |
-| HAProxy redémarre en boucle : `no SSL certificate specified` | Le chemin du certificat désigne un dossier, pas un fichier. |
+| Un HAProxy redémarre en boucle : `no SSL certificate specified` | Le chemin du certificat désigne un dossier, pas un fichier. |
 | HAProxy : `unable to load SSL private key` | Clé chiffrée, illisible par l'UID 99, ou qui ne correspond pas au certificat (voir [docs/HAPROXY.md](docs/HAPROXY.md#problèmes-courants)). |
+| `port is already allocated` | Un autre service utilise déjà ce port : libérez-le, ou changez `HTTP_PORT` / `HTTPS_PORT` (front), `API_*_PORT`, `NOVNC_*_PORT` (API). |
 | Logs de l'API : `Permission denied (publickey…)` vers un hyperviseur | La clé SSH n'est pas autorisée sur l'hyperviseur, ou `SSH_PRIVATE_KEY_HOST_PATH` est faux. |
 | Logs de l'API : `Host key verification failed` | L'hyperviseur n'est pas dans `~/.ssh/known_hosts` de la machine Docker : connectez-vous-y une fois en SSH. |
-| La console noVNC ne s'ouvre pas | `NOVNC_URL` n'est pas `https://<serveur>:6443/vnc.html`, ou le certificat n'a pas été accepté sur le port 6443. |
-| `port is already allocated` au démarrage | Un autre service utilise ce port (souvent le frontend, sur 80 / 443) : changez `API_*_PORT` ou `NOVNC_*_PORT`. |
+| La console reste vide ou ne se connecte pas | Le certificat n'a pas été accepté sur `https://<serveur>:6443`, ou `NOVNC_URL` n'est pas `https://<serveur>:6443/vnc.html`. |
 | `429 Too Many Requests` à la connexion | Trop d'essais : 20 requêtes / 10 s par IP (HAProxy), ou 5 mots de passe faux pour un compte (bloqué 15 minutes). |
+
 
 ---
 
