@@ -1,0 +1,20 @@
+meta {
+  name: List permissions
+  type: http
+  seq: 12
+}
+
+get {
+  url: {{baseUrl}}{{apiPrefix}}/hypervisors/{{hypervisorId}}/templates/{{templateId}}/permissions
+  body: none
+  auth: inherit
+}
+
+assert {
+  res.status: eq 200
+}
+
+docs {
+  Admin only. The rights given on the template: kind (user or group), id, name, role (use or manage),
+  max_vms (null: no limit) and, for a user, vm_count (the VMs they own from this template).
+}

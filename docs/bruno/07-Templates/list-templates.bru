@@ -15,9 +15,10 @@ assert {
 }
 
 docs {
-  Templates of the hypervisor. Needs a grant on it (admins have it everywhere).
-  Admins see every template with its packer_config, and the state of its latest build.
-  Users only see the templates that have a built version and are open to them
-  (visibility "hypervisor", or "restricted" with an access entry), without packer_config.
+  The templates the caller has a right on (admins: all), each with access {level, max_vms, vm_count}:
+  level is use, manage or admin; max_vms how many VMs from it the caller may own (null: no limit).
+  Users see a template once it has a built version, without packer_config; managers see it at once.
+  A "hypervisor" template is also usable by every user granted the hypervisor; a "restricted" one
+  only through permissions given to the user or to one of their groups (nested groups included).
   default_version is the version used to create VMs when none is given (latest built one).
 }

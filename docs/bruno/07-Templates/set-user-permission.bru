@@ -1,0 +1,30 @@
+meta {
+  name: Set user permission
+  type: http
+  seq: 13
+}
+
+put {
+  url: {{baseUrl}}{{apiPrefix}}/hypervisors/{{hypervisorId}}/templates/{{templateId}}/permissions/users/{{userId}}
+  body: json
+  auth: inherit
+}
+
+body:json {
+  {
+    "role": "use",
+    "max_vms": 2
+  }
+}
+
+assert {
+  res.status: eq 204
+}
+
+docs {
+  Admin only. Gives (or changes) a right on the template to a user. Body: SetPermission {role, max_vms}.
+  role: "use" (default) = see the built versions and create VMs; "manage" = also edit, rebuild, stop,
+  read the logs and delete versions (a Packer configuration runs commands on the build host).
+  max_vms: VMs from this template the user may own; absent or null = no limit.
+  No hypervisor grant is needed to create VMs from the template.
+}

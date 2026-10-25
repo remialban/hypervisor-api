@@ -1,0 +1,28 @@
+meta {
+  name: Set group permission
+  type: http
+  seq: 14
+}
+
+put {
+  url: {{baseUrl}}{{apiPrefix}}/hypervisors/{{hypervisorId}}/templates/{{templateId}}/permissions/groups/{{groupId}}
+  body: json
+  auth: inherit
+}
+
+body:json {
+  {
+    "role": "use",
+    "max_vms": 1
+  }
+}
+
+assert {
+  res.status: eq 204
+}
+
+docs {
+  Admin only. Same as "Set user permission", for every user of the group and of its nested groups.
+  max_vms applies to each of them. When several rights reach a user (their own, their groups'),
+  the highest role and the most generous max_vms win.
+}

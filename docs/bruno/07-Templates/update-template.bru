@@ -22,7 +22,7 @@ assert {
 }
 
 docs {
-  Admin only. Body: UpdateTemplate {name, packer_config, disk_name, pool, visibility, allow_vm_creation}, every field optional.
+  Admins and managers of the template (visibility: admins only). Body: UpdateTemplate {name, packer_config, disk_name, pool, visibility, allow_vm_creation}, every field optional.
   allow_vm_creation: false refuses POST .../vms for everyone, admins included (409); the template stays listed.
   Existing versions are not changed: run "Rebuild template" to build a new version from the edited definition.
 }

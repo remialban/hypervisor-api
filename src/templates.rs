@@ -6,14 +6,22 @@
 //! its last good version. A VM gets its own full copy of the version's disk.
 //!
 //! Rights:
-//! * Admins create, edit, rebuild, stop and delete templates and read the build logs: a
-//!   Packer configuration runs arbitrary commands (provisioners, `shell-local`) on the
-//!   machine that builds it, and the configuration and the logs often hold passwords.
-//! * Users granted a hypervisor see its templates that have a built version, and only the
-//!   built versions, without configuration nor logs. A `restricted` template is only shown
-//!   to the users an admin listed (`.../access`). They create VMs from it within their
-//!   quota and own those VMs, as with `POST .../vms`.
-//! * An admin can turn off VM creation from a template (`allow_vm_creation`), for everyone.
+//! * Admins create and delete templates, choose their visibility and give rights on them.
+//! * A right (`.../permissions`) goes to a user or to a group, and so to every user in it,
+//!   nested groups included. `use`: see the built versions and create VMs from them.
+//!   `manage`: also edit, rebuild and stop the template, see every build with its
+//!   configuration and its log, and delete versions. A Packer configuration runs arbitrary
+//!   commands (provisioners, `shell-local`) on the machine that builds it: giving `manage`
+//!   is trusting with that machine.
+//! * A right may limit how many VMs from the template each user covered owns (`max_vms`).
+//!   When several rights apply (the user's, their groups'), the most generous one wins.
+//! * A `hypervisor` template can also be used, without limit, by every user granted its
+//!   hypervisor; a `restricted` one only through rights. A right is enough to create VMs
+//!   from the template, even without a grant on the hypervisor.
+//! * Users see a template only once it has a built version (managers see it at once),
+//!   and never its configuration nor its logs. They own the VMs they create from it, within
+//!   their quota, as with `POST .../vms`.
+//! * VM creation can be turned off for a template (`allow_vm_creation`), for everyone.
 //!
 //! Builds run in the background, one at a time per template and `MAX_CONCURRENT_BUILDS`
 //! overall. A version goes `pending` (waiting for a build slot), `in_progress`, then
@@ -58,6 +66,7 @@ use crate::{
     audit,
     auth::{self, AuthUser, now},
     errors::ApiError,
+    groups,
     jobs::Job,
     libvirt,
     models::Message,
@@ -86,11 +95,6 @@ const GIB: u64 = 1024 * 1024 * 1024;
 
 const TEMPLATE_COLUMNS: &str = "t.id, t.hypervisor_id, t.name, t.packer_config, t.disk_name, t.pool, t.visibility, t.allow_vm_creation, t.created_at, t.updated_at";
 const VERSION_COLUMNS: &str = "template_id, version, packer_config, disk_name, pool, volume, status, disk_size_gb, error, created_at, started_at, finished_at";
-/// What a caller may see of `templates t`. Parameters: ?2 is admin, ?3 the caller's id.
-/// A user sees a template open to the hypervisor or to them, once it has a built version.
-const VISIBLE: &str = "(?2 OR ((t.visibility = 'hypervisor'
-        OR EXISTS (SELECT 1 FROM template_access a WHERE a.template_id = t.id AND a.user_id = ?3))
-    AND EXISTS (SELECT 1 FROM template_versions v WHERE v.template_id = t.id AND v.status = 'created')))";
 const BUILDING: &str = "('pending', 'in_progress', 'stopping')";
 
 static BUILD_SLOTS: Semaphore = Semaphore::const_new(MAX_CONCURRENT_BUILDS);
@@ -99,6 +103,9 @@ static RUNNING: LazyLock<Mutex<HashMap<String, Arc<BuildControl>>>> =
     LazyLock::new(Default::default);
 /// Unfinished versions created before this time belong to a previous run of the API.
 static STARTED_AT: LazyLock<i64> = LazyLock::new(now);
+/// VMs being created from a template, by (template, owner): they count in its limit.
+static PENDING_VMS: LazyLock<Mutex<HashMap<(String, String), i64>>> =
+    LazyLock::new(Default::default);
 
 // ---------- models ----------
 
@@ -128,15 +135,81 @@ impl TemplateStatus {
     }
 }
 
-/// Who may use a template, besides admins.
+/// Who may use a template besides admins and the users and groups given a right on it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema, sqlx::Type)]
 #[serde(rename_all = "snake_case")]
 #[sqlx(type_name = "TEXT", rename_all = "snake_case")]
 pub enum Visibility {
-    /// Every user granted the hypervisor (default).
+    /// Also every user granted the hypervisor, without limit (default).
     Hypervisor,
-    /// Only the users listed in `.../access` (who also need the hypervisor grant).
+    /// Only through rights (`.../permissions`).
     Restricted,
+}
+
+/// A right on a template.
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, ToSchema, sqlx::Type,
+)]
+#[serde(rename_all = "snake_case")]
+#[sqlx(type_name = "TEXT", rename_all = "snake_case")]
+pub enum TemplateRole {
+    /// See the built versions and create VMs from them.
+    Use,
+    /// Also edit, rebuild and stop the template, read its logs and delete versions.
+    Manage,
+}
+
+/// What the caller may do with a template.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AccessLevel {
+    Use,
+    Manage,
+    Admin,
+}
+
+/// The caller's rights on a template, all rights that apply to them combined.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, ToSchema)]
+pub struct TemplateAccess {
+    pub level: AccessLevel,
+    /// How many VMs from this template the caller may own; null: no limit.
+    pub max_vms: Option<i64>,
+    /// VMs the caller owns that were created from this template.
+    pub vm_count: i64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum PrincipalKind {
+    User,
+    Group,
+}
+
+/// A right given to a user or a group.
+#[derive(Serialize, ToSchema)]
+pub struct TemplatePermission {
+    pub kind: PrincipalKind,
+    /// Id of the user or of the group.
+    pub id: String,
+    /// Username, or group name.
+    pub name: String,
+    pub role: TemplateRole,
+    /// VMs from this template each user covered may own; null: no limit.
+    pub max_vms: Option<i64>,
+    /// For a user: the VMs they own from this template.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vm_count: Option<i64>,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+/// Body of `PUT .../permissions/users/{user_id}` and `.../permissions/groups/{group_id}`.
+#[derive(Deserialize, ToSchema)]
+pub struct SetPermission {
+    /// Default: `use`.
+    pub role: Option<TemplateRole>,
+    /// VMs from this template each user covered may own. Absent or null: no limit.
+    pub max_vms: Option<i64>,
 }
 
 #[derive(FromRow)]
@@ -158,7 +231,7 @@ pub struct Template {
     pub id: String,
     pub hypervisor_id: String,
     pub name: String,
-    /// Admin only. Edited with PATCH, used by the next build.
+    /// Managers and admins only. Edited with PATCH, used by the next build.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub packer_config: Option<String>,
     /// File name of the disk image Packer writes.
@@ -168,6 +241,8 @@ pub struct Template {
     pub visibility: Visibility,
     /// When false, nobody (admins included) can create a VM from this template.
     pub allow_vm_creation: bool,
+    /// What the caller may do with it.
+    pub access: TemplateAccess,
     /// State of the latest version (for users: of the latest built one).
     pub status: Option<TemplateStatus>,
     /// Version used to create VMs when none is given: the latest built one.
@@ -182,7 +257,7 @@ pub struct Template {
 pub struct TemplateVersion {
     pub template_id: String,
     pub version: i64,
-    /// Admin only: the configuration this version was built from.
+    /// Managers and admins only: the configuration this version was built from.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub packer_config: Option<String>,
     pub disk_name: String,
@@ -192,7 +267,7 @@ pub struct TemplateVersion {
     pub status: TemplateStatus,
     /// Virtual size of the built disk, once created.
     pub disk_size_gb: Option<i64>,
-    /// Admin only: why the build failed (end of its output).
+    /// Managers and admins only: why the build failed (end of its output).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
     pub created_at: i64,
@@ -216,6 +291,7 @@ pub struct CreateTemplate {
 }
 
 /// Fields left out keep their value. Existing versions are not changed: rebuild to apply.
+/// `visibility` is for admins only.
 #[derive(Deserialize, ToSchema)]
 pub struct UpdateTemplate {
     pub name: Option<String>,
@@ -273,13 +349,6 @@ pub struct BuildLog {
     pub truncated: bool,
 }
 
-#[derive(Serialize, ToSchema, FromRow)]
-pub struct TemplateAccessEntry {
-    pub user_id: String,
-    pub username: String,
-    pub created_at: i64,
-}
-
 type Accepted<T> = (StatusCode, [(header::HeaderName, String); 1], Json<T>);
 
 fn accepted<T>(location: String, body: T) -> Accepted<T> {
@@ -296,40 +365,39 @@ fn template_path(hypervisor_id: &str, template_id: &str) -> String {
 
 // ---------- templates ----------
 
-#[utoipa::path(get, path = "/api/hypervisors/{hypervisor_id}/templates", params(("hypervisor_id" = String, Path)), responses((status = 200, body = [Template], description = "Admins see every template, users the built ones open to them"), (status = 403, body = Message), (status = 404, body = Message)), tag = "Templates")]
+#[utoipa::path(get, path = "/api/hypervisors/{hypervisor_id}/templates", params(("hypervisor_id" = String, Path)), responses((status = 200, body = [Template], description = "The templates the caller has a right on (admins: all)"), (status = 404, body = Message)), tag = "Templates")]
 pub async fn list(
     State(state): State<SharedState>,
     user: AuthUser,
     Path(hypervisor_id): Path<String>,
 ) -> Result<Json<Vec<Template>>, ApiError> {
-    access::require_grant(&state, &user, &hypervisor_id).await?;
     libvirt::hypervisor_uri(&state.db, &hypervisor_id).await?;
     fail_interrupted(&state).await?;
+    let caller = Caller::of(&state, &user, &hypervisor_id).await?;
     let rows = sqlx::query_as::<_, TemplateRow>(&format!(
-        "SELECT {TEMPLATE_COLUMNS} FROM templates t WHERE t.hypervisor_id = ?1 AND {VISIBLE} ORDER BY t.name"
+        "SELECT {TEMPLATE_COLUMNS} FROM templates t WHERE t.hypervisor_id = ? ORDER BY t.name"
     ))
     .bind(&hypervisor_id)
-    .bind(user.is_admin())
-    .bind(&user.id)
     .fetch_all(&state.db)
     .await?;
     let mut templates = Vec::with_capacity(rows.len());
     for row in rows {
-        templates.push(view(&state, &user, row).await?);
+        if let Some(rights) = caller.rights(&state, &row).await? {
+            templates.push(view(&state, &user, row, rights).await?);
+        }
     }
     Ok(Json(templates))
 }
 
-#[utoipa::path(get, path = "/api/hypervisors/{hypervisor_id}/templates/{template_id}", params(("hypervisor_id" = String, Path), ("template_id" = String, Path)), responses((status = 200, body = Template), (status = 403, body = Message), (status = 404, body = Message)), tag = "Templates")]
+#[utoipa::path(get, path = "/api/hypervisors/{hypervisor_id}/templates/{template_id}", params(("hypervisor_id" = String, Path), ("template_id" = String, Path)), responses((status = 200, body = Template), (status = 404, body = Message)), tag = "Templates")]
 pub async fn get(
     State(state): State<SharedState>,
     user: AuthUser,
     Path((hypervisor_id, template_id)): Path<(String, String)>,
 ) -> Result<Json<Template>, ApiError> {
-    access::require_grant(&state, &user, &hypervisor_id).await?;
     fail_interrupted(&state).await?;
-    let row = find_template(&state, &user, &hypervisor_id, &template_id).await?;
-    Ok(Json(view(&state, &user, row).await?))
+    let (row, rights) = find_template(&state, &user, &hypervisor_id, &template_id).await?;
+    Ok(Json(view(&state, &user, row, rights).await?))
 }
 
 #[utoipa::path(post, path = "/api/hypervisors/{hypervisor_id}/templates", params(("hypervisor_id" = String, Path)), request_body = CreateTemplate, responses((status = 202, body = Template, description = "Template created and version 1 being built: follow it with GET .../templates/{template_id}"), (status = 400, body = Message), (status = 403, body = Message), (status = 404, body = Message, description = "Hypervisor or pool not found"), (status = 409, body = Message)), tag = "Templates")]
@@ -391,8 +459,8 @@ pub async fn create(
     )
     .await;
 
-    let row = find_template(&state, &user, &hypervisor_id, &id).await?;
-    let template = view(&state, &user, row).await?;
+    let (row, rights) = find_template(&state, &user, &hypervisor_id, &id).await?;
+    let template = view(&state, &user, row, rights).await?;
     Ok(accepted(template_path(&hypervisor_id, &id), template))
 }
 
@@ -403,9 +471,13 @@ pub async fn update(
     Path((hypervisor_id, template_id)): Path<(String, String)>,
     Json(body): Json<UpdateTemplate>,
 ) -> Result<Json<Template>, ApiError> {
-    user.require_admin()?;
     libvirt::hypervisor_uri(&state.db, &hypervisor_id).await?;
-    let row = find_template(&state, &user, &hypervisor_id, &template_id).await?;
+    let (row, rights) = find_template(&state, &user, &hypervisor_id, &template_id).await?;
+    rights.require_manage()?;
+    // Who may use the template is decided by admins.
+    if body.visibility.is_some() {
+        user.require_admin()?;
+    }
     let definition = Definition {
         name: body.name.unwrap_or(row.name),
         packer_config: body.packer_config.unwrap_or(row.packer_config),
@@ -436,8 +508,8 @@ pub async fn update(
         &definition.name,
     )
     .await;
-    let row = find_template(&state, &user, &hypervisor_id, &template_id).await?;
-    Ok(Json(view(&state, &user, row).await?))
+    let (row, rights) = find_template(&state, &user, &hypervisor_id, &template_id).await?;
+    Ok(Json(view(&state, &user, row, rights).await?))
 }
 
 #[utoipa::path(delete, path = "/api/hypervisors/{hypervisor_id}/templates/{template_id}", params(("hypervisor_id" = String, Path), ("template_id" = String, Path)), responses((status = 204, description = "Template, versions and their disks deleted (VMs made from it keep their own copy)"), (status = 403, body = Message), (status = 404, body = Message), (status = 409, body = Message)), tag = "Templates")]
@@ -449,7 +521,7 @@ pub async fn delete(
     user.require_admin()?;
     let uri = libvirt::hypervisor_uri(&state.db, &hypervisor_id).await?;
     fail_interrupted(&state).await?;
-    let row = find_template(&state, &user, &hypervisor_id, &template_id).await?;
+    let (row, _) = find_template(&state, &user, &hypervisor_id, &template_id).await?;
     if building_version(&state, &row.id).await?.is_some() {
         return Err(ApiError::Conflict(
             "The template is being built: stop the build first".into(),
@@ -484,27 +556,26 @@ pub async fn delete(
 
 // ---------- versions ----------
 
-#[utoipa::path(get, path = "/api/hypervisors/{hypervisor_id}/templates/{template_id}/versions", params(("hypervisor_id" = String, Path), ("template_id" = String, Path)), responses((status = 200, body = [TemplateVersion], description = "Newest first. Users only get the built versions"), (status = 403, body = Message), (status = 404, body = Message)), tag = "Templates")]
+#[utoipa::path(get, path = "/api/hypervisors/{hypervisor_id}/templates/{template_id}/versions", params(("hypervisor_id" = String, Path), ("template_id" = String, Path)), responses((status = 200, body = [TemplateVersion], description = "Newest first. Users of the template only get the built versions"), (status = 404, body = Message)), tag = "Templates")]
 pub async fn list_versions(
     State(state): State<SharedState>,
     user: AuthUser,
     Path((hypervisor_id, template_id)): Path<(String, String)>,
 ) -> Result<Json<Vec<TemplateVersion>>, ApiError> {
-    access::require_grant(&state, &user, &hypervisor_id).await?;
     fail_interrupted(&state).await?;
-    let row = find_template(&state, &user, &hypervisor_id, &template_id).await?;
+    let (row, rights) = find_template(&state, &user, &hypervisor_id, &template_id).await?;
     let versions = sqlx::query_as::<_, TemplateVersion>(&format!(
         "SELECT {VERSION_COLUMNS} FROM template_versions WHERE template_id = ?1 AND (?2 OR status = 'created')
          ORDER BY version DESC"
     ))
     .bind(&row.id)
-    .bind(user.is_admin())
+    .bind(rights.manages())
     .fetch_all(&state.db)
     .await?;
     Ok(Json(
         versions
             .into_iter()
-            .map(|version| present_version(&user, version))
+            .map(|version| present_version(rights, version))
             .collect(),
     ))
 }
@@ -515,10 +586,10 @@ pub async fn rebuild(
     user: AuthUser,
     Path((hypervisor_id, template_id)): Path<(String, String)>,
 ) -> Result<Accepted<TemplateVersion>, ApiError> {
-    user.require_admin()?;
     let uri = libvirt::hypervisor_uri(&state.db, &hypervisor_id).await?;
     fail_interrupted(&state).await?;
-    let row = find_template(&state, &user, &hypervisor_id, &template_id).await?;
+    let (row, rights) = find_template(&state, &user, &hypervisor_id, &template_id).await?;
+    rights.require_manage()?;
     let version = start_build(&state, &user, &hypervisor_id, &uri, &row.id).await?;
     audit::record(
         &state,
@@ -536,17 +607,16 @@ pub async fn rebuild(
     Ok(accepted(location, version))
 }
 
-#[utoipa::path(get, path = "/api/hypervisors/{hypervisor_id}/templates/{template_id}/versions/{version}", params(("hypervisor_id" = String, Path), ("template_id" = String, Path), ("version" = i64, Path)), responses((status = 200, body = TemplateVersion), (status = 403, body = Message), (status = 404, body = Message)), tag = "Templates")]
+#[utoipa::path(get, path = "/api/hypervisors/{hypervisor_id}/templates/{template_id}/versions/{version}", params(("hypervisor_id" = String, Path), ("template_id" = String, Path), ("version" = i64, Path)), responses((status = 200, body = TemplateVersion), (status = 404, body = Message)), tag = "Templates")]
 pub async fn get_version(
     State(state): State<SharedState>,
     user: AuthUser,
     Path((hypervisor_id, template_id, version)): Path<(String, String, i64)>,
 ) -> Result<Json<TemplateVersion>, ApiError> {
-    access::require_grant(&state, &user, &hypervisor_id).await?;
     fail_interrupted(&state).await?;
-    let row = find_template(&state, &user, &hypervisor_id, &template_id).await?;
-    let version = find_version(&state, &user, &row.id, version).await?;
-    Ok(Json(present_version(&user, version)))
+    let (row, rights) = find_template(&state, &user, &hypervisor_id, &template_id).await?;
+    let version = find_version(&state, rights.manages(), &row.id, version).await?;
+    Ok(Json(present_version(rights, version)))
 }
 
 #[utoipa::path(delete, path = "/api/hypervisors/{hypervisor_id}/templates/{template_id}/versions/{version}", params(("hypervisor_id" = String, Path), ("template_id" = String, Path), ("version" = i64, Path)), responses((status = 204, description = "Version and its disk deleted"), (status = 403, body = Message), (status = 404, body = Message), (status = 409, body = Message)), tag = "Templates")]
@@ -555,11 +625,11 @@ pub async fn delete_version(
     user: AuthUser,
     Path((hypervisor_id, template_id, version)): Path<(String, String, i64)>,
 ) -> Result<StatusCode, ApiError> {
-    user.require_admin()?;
     let uri = libvirt::hypervisor_uri(&state.db, &hypervisor_id).await?;
     fail_interrupted(&state).await?;
-    let row = find_template(&state, &user, &hypervisor_id, &template_id).await?;
-    let version = find_version(&state, &user, &row.id, version).await?;
+    let (row, rights) = find_template(&state, &user, &hypervisor_id, &template_id).await?;
+    rights.require_manage()?;
+    let version = find_version(&state, true, &row.id, version).await?;
     if version.status.is_building() {
         return Err(ApiError::Conflict(
             "This version is being built: stop the build first".into(),
@@ -590,12 +660,12 @@ pub async fn logs(
     Path((hypervisor_id, template_id, version)): Path<(String, String, i64)>,
     Query(query): Query<LogQuery>,
 ) -> Result<Json<BuildLog>, ApiError> {
-    // Build output shows the configuration at work, secrets included: admins only.
-    user.require_admin()?;
     libvirt::hypervisor_uri(&state.db, &hypervisor_id).await?;
     fail_interrupted(&state).await?;
-    let row = find_template(&state, &user, &hypervisor_id, &template_id).await?;
-    let version = find_version(&state, &user, &row.id, version).await?;
+    let (row, rights) = find_template(&state, &user, &hypervisor_id, &template_id).await?;
+    // Build output shows the configuration at work, secrets included.
+    rights.require_manage()?;
+    let version = find_version(&state, true, &row.id, version).await?;
     // Read after the state: a build that ended meanwhile has saved its whole log.
     let text = match control_of(&build_key(&row.id, version.version)) {
         Some(control) => control.log().text.clone(),
@@ -634,10 +704,10 @@ pub async fn stop(
     Path((hypervisor_id, template_id)): Path<(String, String)>,
     Query(query): Query<StopQuery>,
 ) -> Result<Accepted<TemplateVersion>, ApiError> {
-    user.require_admin()?;
     libvirt::hypervisor_uri(&state.db, &hypervisor_id).await?;
     fail_interrupted(&state).await?;
-    let row = find_template(&state, &user, &hypervisor_id, &template_id).await?;
+    let (row, rights) = find_template(&state, &user, &hypervisor_id, &template_id).await?;
+    rights.require_manage()?;
     let no_build = || ApiError::Conflict("No build of this template is running".into());
     let number = building_version(&state, &row.id)
         .await?
@@ -678,7 +748,7 @@ pub async fn stop(
         &format!("version {number}"),
     )
     .await;
-    let version = find_version(&state, &user, &row.id, number).await?;
+    let version = find_version(&state, true, &row.id, number).await?;
     let location = format!(
         "{}/versions/{number}",
         template_path(&hypervisor_id, &row.id)
@@ -686,106 +756,253 @@ pub async fn stop(
     Ok(accepted(location, version))
 }
 
-// ---------- access ----------
+// ---------- permissions ----------
 
-#[utoipa::path(get, path = "/api/hypervisors/{hypervisor_id}/templates/{template_id}/access", params(("hypervisor_id" = String, Path), ("template_id" = String, Path)), responses((status = 200, body = [TemplateAccessEntry], description = "Users allowed to use a restricted template"), (status = 403, body = Message), (status = 404, body = Message)), tag = "Templates")]
-pub async fn list_access(
+#[utoipa::path(get, path = "/api/hypervisors/{hypervisor_id}/templates/{template_id}/permissions", params(("hypervisor_id" = String, Path), ("template_id" = String, Path)), responses((status = 200, body = [TemplatePermission], description = "Users first, then groups"), (status = 403, body = Message), (status = 404, body = Message)), tag = "Templates")]
+pub async fn list_permissions(
     State(state): State<SharedState>,
     user: AuthUser,
     Path((hypervisor_id, template_id)): Path<(String, String)>,
-) -> Result<Json<Vec<TemplateAccessEntry>>, ApiError> {
+) -> Result<Json<Vec<TemplatePermission>>, ApiError> {
     user.require_admin()?;
-    let row = find_template(&state, &user, &hypervisor_id, &template_id).await?;
-    let entries = sqlx::query_as::<_, TemplateAccessEntry>(
-        "SELECT a.user_id, u.username, a.created_at FROM template_access a JOIN users u ON u.id = a.user_id
-         WHERE a.template_id = ? ORDER BY u.username",
+    let (row, _) = find_template(&state, &user, &hypervisor_id, &template_id).await?;
+    let entries = sqlx::query_as::<_, PermissionRow>(
+        "SELECT 'user' AS kind, p.user_id AS id, u.username AS name, p.role, p.max_vms, p.created_at, p.updated_at
+         FROM template_permissions p JOIN users u ON u.id = p.user_id WHERE p.template_id = ?1
+         UNION ALL
+         SELECT 'group', p.group_id, g.name, p.role, p.max_vms, p.created_at, p.updated_at
+         FROM template_permissions p JOIN user_groups g ON g.id = p.group_id WHERE p.template_id = ?1
+         ORDER BY 1 DESC, 3",
     )
     .bind(&row.id)
     .fetch_all(&state.db)
     .await?;
-    Ok(Json(entries))
+    let mut permissions = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let (kind, vm_count) = if entry.kind == "user" {
+            (
+                PrincipalKind::User,
+                Some(vms_from(&state, &row.id, &entry.id).await?),
+            )
+        } else {
+            (PrincipalKind::Group, None)
+        };
+        permissions.push(TemplatePermission {
+            kind,
+            id: entry.id,
+            name: entry.name,
+            role: entry.role,
+            max_vms: entry.max_vms,
+            vm_count,
+            created_at: entry.created_at,
+            updated_at: entry.updated_at,
+        });
+    }
+    Ok(Json(permissions))
 }
 
-/// Lets a user use a `restricted` template (they also need the hypervisor grant).
-#[utoipa::path(put, path = "/api/hypervisors/{hypervisor_id}/templates/{template_id}/access/{user_id}", params(("hypervisor_id" = String, Path), ("template_id" = String, Path), ("user_id" = String, Path)), responses((status = 204), (status = 403, body = Message), (status = 404, body = Message)), tag = "Templates")]
-pub async fn grant_access(
+#[derive(FromRow)]
+struct PermissionRow {
+    /// `user` or `group`.
+    kind: String,
+    id: String,
+    name: String,
+    role: TemplateRole,
+    max_vms: Option<i64>,
+    created_at: i64,
+    updated_at: i64,
+}
+
+#[utoipa::path(put, path = "/api/hypervisors/{hypervisor_id}/templates/{template_id}/permissions/users/{user_id}", params(("hypervisor_id" = String, Path), ("template_id" = String, Path), ("user_id" = String, Path)), request_body = SetPermission, responses((status = 204, description = "Right given or changed"), (status = 400, body = Message), (status = 403, body = Message), (status = 404, body = Message)), tag = "Templates")]
+pub async fn set_user_permission(
     State(state): State<SharedState>,
     user: AuthUser,
     Path((hypervisor_id, template_id, user_id)): Path<(String, String, String)>,
+    Json(body): Json<SetPermission>,
 ) -> Result<StatusCode, ApiError> {
     user.require_admin()?;
-    let row = find_template(&state, &user, &hypervisor_id, &template_id).await?;
-    let exists: Option<i64> = sqlx::query_scalar("SELECT 1 FROM users WHERE id = ?")
+    let (row, _) = find_template(&state, &user, &hypervisor_id, &template_id).await?;
+    let name: Option<String> = sqlx::query_scalar("SELECT username FROM users WHERE id = ?")
         .bind(&user_id)
         .fetch_optional(&state.db)
         .await?;
-    exists.ok_or_else(|| ApiError::NotFound("User not found".into()))?;
-    sqlx::query(
-        "INSERT OR IGNORE INTO template_access (template_id, user_id, created_at) VALUES (?, ?, ?)",
-    )
-    .bind(&row.id)
-    .bind(&user_id)
-    .bind(now())
-    .execute(&state.db)
-    .await?;
+    let name = name.ok_or_else(|| ApiError::NotFound("User not found".into()))?;
+    set_permission(&state, &row.id, Principal::User, &user_id, &body).await?;
     audit::record(
         &state,
         &user,
-        "template.grant",
+        "template.permission",
         &format!("{hypervisor_id}/{}", row.id),
-        &user_id,
+        &permission_detail("user", &name, &body),
     )
     .await;
     Ok(StatusCode::NO_CONTENT)
 }
 
-#[utoipa::path(delete, path = "/api/hypervisors/{hypervisor_id}/templates/{template_id}/access/{user_id}", params(("hypervisor_id" = String, Path), ("template_id" = String, Path), ("user_id" = String, Path)), responses((status = 204), (status = 403, body = Message), (status = 404, body = Message)), tag = "Templates")]
-pub async fn revoke_access(
+#[utoipa::path(put, path = "/api/hypervisors/{hypervisor_id}/templates/{template_id}/permissions/groups/{group_id}", params(("hypervisor_id" = String, Path), ("template_id" = String, Path), ("group_id" = String, Path)), request_body = SetPermission, responses((status = 204, description = "Right given or changed, for every user of the group and of its nested groups"), (status = 400, body = Message), (status = 403, body = Message), (status = 404, body = Message)), tag = "Templates")]
+pub async fn set_group_permission(
+    State(state): State<SharedState>,
+    user: AuthUser,
+    Path((hypervisor_id, template_id, group_id)): Path<(String, String, String)>,
+    Json(body): Json<SetPermission>,
+) -> Result<StatusCode, ApiError> {
+    user.require_admin()?;
+    let (row, _) = find_template(&state, &user, &hypervisor_id, &template_id).await?;
+    let name: Option<String> = sqlx::query_scalar("SELECT name FROM user_groups WHERE id = ?")
+        .bind(&group_id)
+        .fetch_optional(&state.db)
+        .await?;
+    let name = name.ok_or_else(|| ApiError::NotFound("Group not found".into()))?;
+    set_permission(&state, &row.id, Principal::Group, &group_id, &body).await?;
+    audit::record(
+        &state,
+        &user,
+        "template.permission",
+        &format!("{hypervisor_id}/{}", row.id),
+        &permission_detail("group", &name, &body),
+    )
+    .await;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[utoipa::path(delete, path = "/api/hypervisors/{hypervisor_id}/templates/{template_id}/permissions/users/{user_id}", params(("hypervisor_id" = String, Path), ("template_id" = String, Path), ("user_id" = String, Path)), responses((status = 204, description = "Right removed: the VMs already created are kept"), (status = 403, body = Message), (status = 404, body = Message)), tag = "Templates")]
+pub async fn remove_user_permission(
     State(state): State<SharedState>,
     user: AuthUser,
     Path((hypervisor_id, template_id, user_id)): Path<(String, String, String)>,
 ) -> Result<StatusCode, ApiError> {
-    user.require_admin()?;
-    let row = find_template(&state, &user, &hypervisor_id, &template_id).await?;
-    let result = sqlx::query("DELETE FROM template_access WHERE template_id = ? AND user_id = ?")
-        .bind(&row.id)
-        .bind(&user_id)
-        .execute(&state.db)
-        .await?;
-    if result.rows_affected() == 0 {
-        return Err(ApiError::NotFound("Access not found".into()));
-    }
-    audit::record(
+    remove_permission(
         &state,
         &user,
-        "template.revoke",
-        &format!("{hypervisor_id}/{}", row.id),
+        &hypervisor_id,
+        &template_id,
+        Principal::User,
         &user_id,
+    )
+    .await
+}
+
+#[utoipa::path(delete, path = "/api/hypervisors/{hypervisor_id}/templates/{template_id}/permissions/groups/{group_id}", params(("hypervisor_id" = String, Path), ("template_id" = String, Path), ("group_id" = String, Path)), responses((status = 204, description = "Right removed: the VMs already created are kept"), (status = 403, body = Message), (status = 404, body = Message)), tag = "Templates")]
+pub async fn remove_group_permission(
+    State(state): State<SharedState>,
+    user: AuthUser,
+    Path((hypervisor_id, template_id, group_id)): Path<(String, String, String)>,
+) -> Result<StatusCode, ApiError> {
+    remove_permission(
+        &state,
+        &user,
+        &hypervisor_id,
+        &template_id,
+        Principal::Group,
+        &group_id,
+    )
+    .await
+}
+
+/// Who a right is given to.
+#[derive(Clone, Copy)]
+enum Principal {
+    User,
+    Group,
+}
+
+impl Principal {
+    fn column(self) -> &'static str {
+        match self {
+            Principal::User => "user_id",
+            Principal::Group => "group_id",
+        }
+    }
+}
+
+async fn set_permission(
+    state: &SharedState,
+    template_id: &str,
+    principal: Principal,
+    principal_id: &str,
+    body: &SetPermission,
+) -> Result<(), ApiError> {
+    if body.max_vms.is_some_and(|max| max < 0) {
+        return Err(bad("max_vms must be 0 or more (null: no limit)"));
+    }
+    let column = principal.column();
+    let at = now();
+    sqlx::query(&format!(
+        "INSERT INTO template_permissions (template_id, {column}, role, max_vms, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT (template_id, {column}) WHERE {column} IS NOT NULL
+         DO UPDATE SET role = excluded.role, max_vms = excluded.max_vms, updated_at = excluded.updated_at"
+    ))
+    .bind(template_id)
+    .bind(principal_id)
+    .bind(body.role.unwrap_or(TemplateRole::Use))
+    .bind(body.max_vms)
+    .bind(at)
+    .bind(at)
+    .execute(&state.db)
+    .await?;
+    Ok(())
+}
+
+async fn remove_permission(
+    state: &SharedState,
+    user: &AuthUser,
+    hypervisor_id: &str,
+    template_id: &str,
+    principal: Principal,
+    principal_id: &str,
+) -> Result<StatusCode, ApiError> {
+    user.require_admin()?;
+    let (row, _) = find_template(state, user, hypervisor_id, template_id).await?;
+    let column = principal.column();
+    let result = sqlx::query(&format!(
+        "DELETE FROM template_permissions WHERE template_id = ? AND {column} = ?"
+    ))
+    .bind(&row.id)
+    .bind(principal_id)
+    .execute(&state.db)
+    .await?;
+    if result.rows_affected() == 0 {
+        return Err(ApiError::NotFound("Permission not found".into()));
+    }
+    audit::record(
+        state,
+        user,
+        "template.permission_remove",
+        &format!("{hypervisor_id}/{}", row.id),
+        &format!("{column} {principal_id}"),
     )
     .await;
     Ok(StatusCode::NO_CONTENT)
+}
+
+fn permission_detail(kind: &str, name: &str, body: &SetPermission) -> String {
+    let role = body.role.unwrap_or(TemplateRole::Use);
+    match body.max_vms {
+        Some(max) => format!("{kind} {name}: {role:?}, at most {max} VMs"),
+        None => format!("{kind} {name}: {role:?}, no limit"),
+    }
 }
 
 // ---------- VMs ----------
 
-#[utoipa::path(post, path = "/api/hypervisors/{hypervisor_id}/templates/{template_id}/vms", params(("hypervisor_id" = String, Path), ("template_id" = String, Path)), request_body = CreateVmFromTemplate, responses((status = 202, body = Job, description = "Creation started (the disk is copied): follow it with GET /api/jobs/{job_id}"), (status = 400, body = Message), (status = 403, body = Message, description = "No access to the hypervisor, or quota exceeded"), (status = 404, body = Message), (status = 409, body = Message)), tag = "Templates")]
+#[utoipa::path(post, path = "/api/hypervisors/{hypervisor_id}/templates/{template_id}/vms", params(("hypervisor_id" = String, Path), ("template_id" = String, Path)), request_body = CreateVmFromTemplate, responses((status = 202, body = Job, description = "Creation started (the disk is copied): follow it with GET /api/jobs/{job_id}"), (status = 400, body = Message), (status = 403, body = Message, description = "Quota or template limit (max_vms) reached"), (status = 404, body = Message), (status = 409, body = Message)), tag = "Templates")]
 pub async fn create_vm(
     State(state): State<SharedState>,
     user: AuthUser,
     Path((hypervisor_id, template_id)): Path<(String, String)>,
     Json(body): Json<CreateVmFromTemplate>,
 ) -> Result<Accepted<Job>, ApiError> {
-    // Same rule as POST .../vms: a grant on the hypervisor (admins have it everywhere).
-    access::require_grant(&state, &user, &hypervisor_id).await?;
     let uri = libvirt::hypervisor_uri(&state.db, &hypervisor_id).await?;
-    let row = find_template(&state, &user, &hypervisor_id, &template_id).await?;
+    // Any right on the template allows it (`use` or `manage`): no hypervisor grant needed.
+    let (row, rights) = find_template(&state, &user, &hypervisor_id, &template_id).await?;
     if !row.allow_vm_creation {
         return Err(ApiError::Conflict(
             "Creating VMs from this template is disabled".into(),
         ));
     }
     let version = match body.version {
-        Some(number) => find_version(&state, &user, &row.id, number).await?,
+        Some(number) => find_version(&state, rights.manages(), &row.id, number).await?,
         None => {
             let latest: Option<i64> = sqlx::query_scalar(
                 "SELECT MAX(version) FROM template_versions WHERE template_id = ? AND status = 'created'",
@@ -796,7 +1013,7 @@ pub async fn create_vm(
             let latest = latest.ok_or_else(|| {
                 ApiError::Conflict("The template has no built version yet".into())
             })?;
-            find_version(&state, &user, &row.id, latest).await?
+            find_version(&state, rights.manages(), &row.id, latest).await?
         }
     };
     if version.status != TemplateStatus::Created {
@@ -828,10 +1045,21 @@ pub async fn create_vm(
     let new_vm = blocking(move || check_new_vm(&new_vm).map(|_| new_vm)).await?;
 
     // Under the lock, so that two requests cannot both pass the check of the last free slot.
-    let job = {
+    let (job, pending) = {
         let _quota = state.quota_lock.lock().await;
         access::check_quota(&state, &owner_id, usage).await?;
-        state.jobs.start("template_vm", &owner_id, usage)
+        // Admins are not limited (an admin creating a VM for a user neither).
+        if let (false, Some(max_vms)) = (user.is_admin(), rights.max_vms) {
+            let owned =
+                vms_from(&state, &row.id, &owner_id).await? + PendingVm::count(&row.id, &owner_id);
+            if owned >= max_vms {
+                return Err(ApiError::Forbidden(format!(
+                    "Template limit reached: you may own at most {max_vms} VMs from this template"
+                )));
+            }
+        }
+        let pending = PendingVm::new(&row.id, &owner_id);
+        (state.jobs.start("template_vm", &owner_id, usage), pending)
     };
     audit::record(
         &state,
@@ -844,6 +1072,7 @@ pub async fn create_vm(
 
     let job_id = job.id.clone();
     let task_state = Arc::clone(&state);
+    let (template_id, version_number) = (row.id.clone(), version.version);
     tokio::spawn(async move {
         let outcome = match blocking(move || define_from_template(&new_vm)).await {
             Ok(vm_id) => libvirt::get_vm(uri, hypervisor_id.clone(), vm_id).await,
@@ -853,9 +1082,23 @@ pub async fn create_vm(
         // client sees a VM it cannot access.
         let outcome = match outcome {
             Ok(vm) => {
-                match access::record_owner(&task_state, &hypervisor_id, &vm.id, &owner_id, usage)
-                    .await
-                {
+                let recorded =
+                    access::record_owner(&task_state, &hypervisor_id, &vm.id, &owner_id, usage)
+                        .await;
+                let recorded = match recorded {
+                    Ok(()) => {
+                        record_origin(
+                            &task_state,
+                            &hypervisor_id,
+                            &vm.id,
+                            &template_id,
+                            version_number,
+                        )
+                        .await
+                    }
+                    Err(error) => Err(error),
+                };
+                match recorded {
                     Ok(()) => {
                         let vm_access = if owner_id == user.id {
                             VmAccess::Owner
@@ -869,6 +1112,8 @@ pub async fn create_vm(
             }
             Err(error) => Err(error),
         };
+        // The VM now counts through template_vms: no longer as pending.
+        drop(pending);
         task_state.jobs.finish(&job_id, outcome);
     });
 
@@ -882,23 +1127,29 @@ async fn find_template(
     user: &AuthUser,
     hypervisor_id: &str,
     template_id: &str,
-) -> Result<TemplateRow, ApiError> {
-    sqlx::query_as::<_, TemplateRow>(&format!(
-        "SELECT {TEMPLATE_COLUMNS} FROM templates t WHERE t.hypervisor_id = ?1 AND {VISIBLE} AND t.id = ?4"
+) -> Result<(TemplateRow, Rights), ApiError> {
+    let not_found = || ApiError::NotFound("Template not found".into());
+    let row = sqlx::query_as::<_, TemplateRow>(&format!(
+        "SELECT {TEMPLATE_COLUMNS} FROM templates t WHERE t.hypervisor_id = ? AND t.id = ?"
     ))
     .bind(hypervisor_id)
-    .bind(user.is_admin())
-    .bind(&user.id)
     .bind(template_id)
     .fetch_optional(&state.db)
     .await?
-    .ok_or_else(|| ApiError::NotFound("Template not found".into()))
+    .ok_or_else(not_found)?;
+    // Someone with no right on the template gets a 404, as if it did not exist.
+    let rights = Caller::of(state, user, hypervisor_id)
+        .await?
+        .rights(state, &row)
+        .await?
+        .ok_or_else(not_found)?;
+    Ok((row, rights))
 }
 
-/// Users only see the built versions.
+/// `all`: every build (managers); otherwise only the built versions.
 async fn find_version(
     state: &SharedState,
-    user: &AuthUser,
+    all: bool,
     template_id: &str,
     version: i64,
 ) -> Result<TemplateVersion, ApiError> {
@@ -908,7 +1159,7 @@ async fn find_version(
     ))
     .bind(template_id)
     .bind(version)
-    .bind(user.is_admin())
+    .bind(all)
     .fetch_optional(&state.db)
     .await?
     .ok_or_else(|| ApiError::NotFound("Template version not found".into()))
@@ -927,13 +1178,14 @@ async fn view(
     state: &SharedState,
     user: &AuthUser,
     row: TemplateRow,
+    rights: Rights,
 ) -> Result<Template, ApiError> {
     let latest = sqlx::query_as::<_, TemplateVersion>(&format!(
         "SELECT {VERSION_COLUMNS} FROM template_versions WHERE template_id = ?1 AND (?2 OR status = 'created')
          ORDER BY version DESC LIMIT 1"
     ))
     .bind(&row.id)
-    .bind(user.is_admin())
+    .bind(rights.manages())
     .fetch_optional(&state.db)
     .await?;
     let default_version: Option<i64> = sqlx::query_scalar(
@@ -942,12 +1194,18 @@ async fn view(
     .bind(&row.id)
     .fetch_one(&state.db)
     .await?;
+    let access = TemplateAccess {
+        level: rights.level,
+        max_vms: rights.max_vms,
+        vm_count: vms_from(state, &row.id, &user.id).await?,
+    };
     Ok(Template {
         status: latest.as_ref().map(|version| version.status),
-        latest_version: latest.map(|version| present_version(user, version)),
+        latest_version: latest.map(|version| present_version(rights, version)),
         default_version,
-        // The configuration can hold secrets: only admins get it.
-        packer_config: user.is_admin().then_some(row.packer_config),
+        // The configuration can hold secrets: only those managing the template get it.
+        packer_config: rights.manages().then_some(row.packer_config),
+        access,
         id: row.id,
         hypervisor_id: row.hypervisor_id,
         name: row.name,
@@ -960,13 +1218,235 @@ async fn view(
     })
 }
 
-/// The configuration and the build output can hold secrets: only admins get them.
-fn present_version(user: &AuthUser, mut version: TemplateVersion) -> TemplateVersion {
-    if !user.is_admin() {
+/// The configuration and the build output can hold secrets: only managers get them.
+fn present_version(rights: Rights, mut version: TemplateVersion) -> TemplateVersion {
+    if !rights.manages() {
         version.packer_config = None;
         version.error = None;
     }
     version
+}
+
+// ---------- rights ----------
+
+/// What a caller may do with one template: every right that applies to them, combined.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Rights {
+    level: AccessLevel,
+    /// None: no limit.
+    max_vms: Option<i64>,
+}
+
+impl Rights {
+    /// Adds a right: the highest level and the most generous limit win.
+    fn with(self, level: AccessLevel, max_vms: Option<i64>) -> Rights {
+        Rights {
+            level: self.level.max(level),
+            max_vms: match (self.max_vms, max_vms) {
+                (Some(a), Some(b)) => Some(a.max(b)),
+                _ => None,
+            },
+        }
+    }
+
+    fn manages(self) -> bool {
+        self.level >= AccessLevel::Manage
+    }
+
+    fn require_manage(self) -> Result<(), ApiError> {
+        if self.manages() {
+            Ok(())
+        } else {
+            Err(ApiError::Forbidden(
+                "You do not manage this template".into(),
+            ))
+        }
+    }
+}
+
+impl TemplateRole {
+    fn level(self) -> AccessLevel {
+        match self {
+            TemplateRole::Use => AccessLevel::Use,
+            TemplateRole::Manage => AccessLevel::Manage,
+        }
+    }
+}
+
+/// One right on a template: given to a user, or to a group.
+#[derive(FromRow)]
+struct RightRow {
+    user_id: Option<String>,
+    group_id: Option<String>,
+    role: TemplateRole,
+    max_vms: Option<i64>,
+}
+
+/// The caller, with what decides their rights on the templates of one hypervisor.
+struct Caller<'a> {
+    user: &'a AuthUser,
+    /// The groups they are in, nested ones included.
+    groups: Vec<String>,
+    /// Granted the hypervisor: its `hypervisor` templates are open to them.
+    granted: bool,
+}
+
+impl<'a> Caller<'a> {
+    async fn of(
+        state: &SharedState,
+        user: &'a AuthUser,
+        hypervisor_id: &str,
+    ) -> Result<Caller<'a>, ApiError> {
+        if user.is_admin() {
+            return Ok(Caller {
+                user,
+                groups: Vec::new(),
+                granted: true,
+            });
+        }
+        let groups = groups::groups_of(state, &user.id)
+            .await?
+            .into_iter()
+            .map(|group| group.id)
+            .collect();
+        let granted = match access::require_grant(state, user, hypervisor_id).await {
+            Ok(()) => true,
+            Err(ApiError::Forbidden(_)) => false,
+            Err(error) => return Err(error),
+        };
+        Ok(Caller {
+            user,
+            groups,
+            granted,
+        })
+    }
+
+    /// None when the caller may not even see the template.
+    async fn rights(
+        &self,
+        state: &SharedState,
+        row: &TemplateRow,
+    ) -> Result<Option<Rights>, ApiError> {
+        if self.user.is_admin() {
+            return Ok(Some(Rights {
+                level: AccessLevel::Admin,
+                max_vms: None,
+            }));
+        }
+        let entries = sqlx::query_as::<_, RightRow>(
+            "SELECT user_id, group_id, role, max_vms FROM template_permissions WHERE template_id = ?",
+        )
+        .bind(&row.id)
+        .fetch_all(&state.db)
+        .await?;
+        let mut rights: Option<Rights> = None;
+        let mut add = |level: AccessLevel, max_vms: Option<i64>| {
+            rights = Some(match rights {
+                Some(rights) => rights.with(level, max_vms),
+                None => Rights { level, max_vms },
+            });
+        };
+        for entry in entries {
+            let applies = entry.user_id.as_deref() == Some(self.user.id.as_str())
+                || entry
+                    .group_id
+                    .is_some_and(|group| self.groups.contains(&group));
+            if applies {
+                add(entry.role.level(), entry.max_vms);
+            }
+        }
+        if row.visibility == Visibility::Hypervisor && self.granted {
+            add(AccessLevel::Use, None);
+        }
+        // Users see a template once it can be used; those managing it, at once.
+        if let Some(found) = rights
+            && !found.manages()
+        {
+            let built: Option<i64> = sqlx::query_scalar(
+                "SELECT 1 FROM template_versions WHERE template_id = ? AND status = 'created' LIMIT 1",
+            )
+            .bind(&row.id)
+            .fetch_optional(&state.db)
+            .await?;
+            if built.is_none() {
+                return Ok(None);
+            }
+        }
+        Ok(rights)
+    }
+}
+
+/// VMs owned by `owner_id` that were created from the template.
+async fn vms_from(state: &SharedState, template_id: &str, owner_id: &str) -> Result<i64, ApiError> {
+    Ok(sqlx::query_scalar(
+        "SELECT COUNT(*) FROM template_vms tv
+         JOIN vm_owners o ON o.hypervisor_id = tv.hypervisor_id AND o.vm_id = tv.vm_id
+         WHERE tv.template_id = ? AND o.owner_id = ?",
+    )
+    .bind(template_id)
+    .bind(owner_id)
+    .fetch_one(&state.db)
+    .await?)
+}
+
+/// Remembers which template (and version) a VM was created from.
+async fn record_origin(
+    state: &SharedState,
+    hypervisor_id: &str,
+    vm_id: &str,
+    template_id: &str,
+    version: i64,
+) -> Result<(), ApiError> {
+    sqlx::query(
+        "INSERT OR REPLACE INTO template_vms (hypervisor_id, vm_id, template_id, version, created_at)
+         VALUES (?, ?, ?, ?, ?)",
+    )
+    .bind(hypervisor_id)
+    .bind(access::parse_vm_id(vm_id)?)
+    .bind(template_id)
+    .bind(version)
+    .bind(now())
+    .execute(&state.db)
+    .await?;
+    Ok(())
+}
+
+/// A VM being created from a template: counted in its limit until the job ends, even if
+/// the task panics.
+struct PendingVm {
+    key: (String, String),
+}
+
+impl PendingVm {
+    fn new(template_id: &str, owner_id: &str) -> PendingVm {
+        let key = (template_id.to_owned(), owner_id.to_owned());
+        *pending_vms().entry(key.clone()).or_default() += 1;
+        PendingVm { key }
+    }
+
+    fn count(template_id: &str, owner_id: &str) -> i64 {
+        pending_vms()
+            .get(&(template_id.to_owned(), owner_id.to_owned()))
+            .copied()
+            .unwrap_or(0)
+    }
+}
+
+impl Drop for PendingVm {
+    fn drop(&mut self) {
+        let mut pending = pending_vms();
+        if let Some(count) = pending.get_mut(&self.key) {
+            *count -= 1;
+            if *count <= 0 {
+                pending.remove(&self.key);
+            }
+        }
+    }
+}
+
+// Never held across an await: a poisoned mutex is still consistent.
+fn pending_vms() -> MutexGuard<'static, HashMap<(String, String), i64>> {
+    PENDING_VMS.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 /// Only an admin can create a VM for someone else.
@@ -1164,7 +1644,8 @@ impl BuildTarget {
     }
 }
 
-/// Creates the next version from the current definition and starts building it.
+/// Creates the next version from the current definition and starts building it. Only for
+/// callers managing the template: the whole version is returned, configuration included.
 async fn start_build(
     state: &SharedState,
     user: &AuthUser,
@@ -1196,11 +1677,7 @@ async fn start_build(
     })?;
     let (number, volume) =
         inserted.ok_or_else(|| ApiError::NotFound("Template not found".into()))?;
-    let admin_view = AuthUser {
-        role: auth::Role::Admin,
-        ..user.clone()
-    };
-    let version = find_version(state, &admin_view, template_id, number).await?;
+    let version = find_version(state, true, template_id, number).await?;
 
     let prepared = async {
         let (uri, pool, volume) = (uri.to_owned(), version.pool.clone(), volume.clone());
@@ -1244,7 +1721,7 @@ async fn start_build(
         },
         control,
     ));
-    Ok(present_version(user, version))
+    Ok(version)
 }
 
 fn build_key(template_id: &str, version: i64) -> String {
@@ -2247,12 +2724,15 @@ build {
     // ---------- rights ----------
 
     #[tokio::test]
-    async fn only_admins_manage_templates() {
+    async fn users_cannot_manage_a_template_they_only_use() {
         let app = TestApp::new().await;
         let (user_id, token) = granted_user(&app).await;
         let (id, _) = insert_template(&app, "created").await;
         let template = format!("{}/{id}", templates(&app));
         let body = template_body(&unique("tpl"), INVALID_CONFIG);
+        let (status, json) = app.status_as(&token, Method::GET, &template).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json["access"]["level"], "use");
         for (method, path, body) in [
             (Method::POST, templates(&app), Some(body)),
             (
@@ -2265,8 +2745,12 @@ build {
             (Method::DELETE, format!("{template}/versions/1"), None),
             (Method::GET, format!("{template}/versions/1/logs"), None),
             (Method::POST, format!("{template}/stop"), None),
-            (Method::GET, format!("{template}/access"), None),
-            (Method::PUT, format!("{template}/access/{user_id}"), None),
+            (Method::GET, format!("{template}/permissions"), None),
+            (
+                Method::PUT,
+                format!("{template}/permissions/users/{user_id}"),
+                Some(json!({ "role": "manage" })),
+            ),
         ] {
             let (status, _, _) = app.send_as(Some(&token), method.clone(), &path, body).await;
             assert_eq!(status, StatusCode::FORBIDDEN, "{method} {path}");
@@ -2364,16 +2848,17 @@ build {
             "admins see every build"
         );
 
-        // No grant on the hypervisor: no templates at all.
+        // No grant on the hypervisor and no right: no templates at all.
         let (_, stranger) = app.user(&unique("user"), "user").await;
-        let (status, _) = app
+        let (status, listed) = app
             .status_as(&stranger, Method::GET, &templates(&app))
             .await;
-        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert_eq!(status, StatusCode::OK);
+        assert!(listed.as_array().unwrap().is_empty());
     }
 
     #[tokio::test]
-    async fn a_restricted_template_is_only_for_the_listed_users() {
+    async fn a_restricted_template_is_only_for_those_given_a_right() {
         let app = TestApp::new().await;
         let (id, _) = insert_template(&app, "created").await;
         let template = format!("{}/{id}", templates(&app));
@@ -2387,6 +2872,7 @@ build {
         assert_eq!(status, StatusCode::OK);
         assert_eq!(json["visibility"], "restricted");
 
+        // A grant on the hypervisor is no longer enough.
         let (user_id, token) = granted_user(&app).await;
         let vm = json!({ "name": unique("vm"), "memory_mb": 128, "vcpus": 1 });
         let (_, listed) = app.status_as(&token, Method::GET, &templates(&app)).await;
@@ -2396,28 +2882,284 @@ build {
                 Some(&token),
                 Method::POST,
                 &format!("{template}/vms"),
-                Some(vm.clone()),
+                Some(vm),
             )
             .await;
         assert_eq!(status, StatusCode::NOT_FOUND);
 
-        let (status, _) = app
-            .status_of(Method::PUT, &format!("{template}/access/{user_id}"))
-            .await;
+        let user_right = format!("{template}/permissions/users/{user_id}");
+        let (status, _, _) = app.send(Method::PUT, &user_right, Some(json!({}))).await;
         assert_eq!(status, StatusCode::NO_CONTENT);
         let (_, entries) = app
-            .status_of(Method::GET, &format!("{template}/access"))
+            .status_of(Method::GET, &format!("{template}/permissions"))
             .await;
-        assert_eq!(entries[0]["user_id"], user_id.as_str());
+        assert_eq!(entries[0]["kind"], "user");
+        assert_eq!(entries[0]["id"], user_id.as_str());
+        assert_eq!(entries[0]["role"], "use");
+        assert!(entries[0]["max_vms"].is_null());
         let (status, _) = app.status_as(&token, Method::GET, &template).await;
         assert_eq!(status, StatusCode::OK);
 
-        let (status, _) = app
-            .status_of(Method::DELETE, &format!("{template}/access/{user_id}"))
-            .await;
+        let (status, _) = app.status_of(Method::DELETE, &user_right).await;
         assert_eq!(status, StatusCode::NO_CONTENT);
         let (status, _) = app.status_as(&token, Method::GET, &template).await;
         assert_eq!(status, StatusCode::NOT_FOUND);
+        let (status, _) = app.status_of(Method::DELETE, &user_right).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    async fn group_with(app: &TestApp, user_id: &str) -> String {
+        let (status, _, group) = app
+            .send(
+                Method::POST,
+                "/api/groups",
+                Some(json!({ "name": unique("group") })),
+            )
+            .await;
+        assert_eq!(status, StatusCode::CREATED);
+        let id = group["id"].as_str().unwrap().to_owned();
+        let (status, _) = app
+            .status_of(Method::PUT, &format!("/api/groups/{id}/members/{user_id}"))
+            .await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
+        id
+    }
+
+    #[tokio::test]
+    async fn a_right_given_to_a_group_reaches_its_nested_groups_without_a_hypervisor_grant() {
+        let app = TestApp::new().await;
+        let (id, _) = insert_template_at(&app, "created", live()).await;
+        let template = format!("{}/{id}", templates(&app));
+        app.send(
+            Method::PATCH,
+            &template,
+            Some(json!({ "visibility": "restricted" })),
+        )
+        .await;
+
+        // company > team > dave; dave has no grant on the hypervisor.
+        let (dave, token) = app.user(&unique("dave"), "user").await;
+        let team = group_with(&app, &dave).await;
+        let (_, _, company) = app
+            .send(
+                Method::POST,
+                "/api/groups",
+                Some(json!({ "name": unique("company") })),
+            )
+            .await;
+        let company = company["id"].as_str().unwrap();
+        app.status_of(
+            Method::PUT,
+            &format!("/api/groups/{company}/subgroups/{team}"),
+        )
+        .await;
+
+        let right = format!("{template}/permissions/groups/{company}");
+        let (status, _, _) = app.send(Method::PUT, &right, Some(json!({}))).await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
+        let (_, listed) = app.status_as(&token, Method::GET, &templates(&app)).await;
+        assert_eq!(listed.as_array().unwrap().len(), 1);
+        let (status, _, job) = app
+            .send_as(
+                Some(&token),
+                Method::POST,
+                &format!("{template}/vms"),
+                Some(json!({ "name": unique("vm"), "memory_mb": 128, "vcpus": 1 })),
+            )
+            .await;
+        assert_eq!(status, StatusCode::ACCEPTED, "{job}");
+        assert_eq!(
+            app.wait_job(job["id"].as_str().unwrap()).await["status"],
+            "succeeded"
+        );
+
+        // Out of the nested group: no more right.
+        app.status_of(
+            Method::DELETE,
+            &format!("/api/groups/{company}/subgroups/{team}"),
+        )
+        .await;
+        let (status, _) = app.status_as(&token, Method::GET, &template).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+
+        let (status, _, _) = app
+            .send(
+                Method::PUT,
+                &format!("{template}/permissions/groups/{}", Uuid::new_v4()),
+                Some(json!({})),
+            )
+            .await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "unknown group");
+    }
+
+    #[tokio::test]
+    async fn a_manager_runs_the_template_but_does_not_give_rights() {
+        let app = TestApp::new().await;
+        let template = create_template(&app, &unique("tpl"), INVALID_CONFIG).await;
+        let id = template["id"].as_str().unwrap();
+        let path = format!("{}/{id}", templates(&app));
+        wait_version(&app, id, 1, ended).await;
+
+        let (eve, token) = app.user(&unique("eve"), "user").await;
+        let (status, _) = app.status_as(&token, Method::GET, &path).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "no right yet");
+        let team = group_with(&app, &eve).await;
+        let (status, _, _) = app
+            .send(
+                Method::PUT,
+                &format!("{path}/permissions/groups/{team}"),
+                Some(json!({ "role": "manage" })),
+            )
+            .await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
+
+        // Managers see the template before any build succeeded, with its configuration.
+        let (status, json) = app.status_as(&token, Method::GET, &path).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json["access"]["level"], "manage");
+        assert_eq!(json["packer_config"], INVALID_CONFIG);
+        assert_eq!(json["latest_version"]["status"], "failed");
+        let (status, log) = app
+            .status_as(&token, Method::GET, &format!("{path}/versions/1/logs"))
+            .await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(log["content"].as_str().unwrap().contains("packer"));
+
+        let (status, _, _) = app
+            .send_as(
+                Some(&token),
+                Method::PATCH,
+                &path,
+                Some(json!({ "packer_config": "edited by a manager" })),
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK);
+        let (status, _, version) = app
+            .send_as(
+                Some(&token),
+                Method::POST,
+                &format!("{path}/versions"),
+                None,
+            )
+            .await;
+        assert_eq!(status, StatusCode::ACCEPTED, "{version}");
+        assert_eq!(version["packer_config"], "edited by a manager");
+        wait_version(&app, id, 2, ended).await;
+        let (status, _) = app
+            .status_as(&token, Method::DELETE, &format!("{path}/versions/1"))
+            .await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
+
+        // Rights and the template itself stay with admins.
+        for (method, target, body) in [
+            (
+                Method::PATCH,
+                path.clone(),
+                Some(json!({ "visibility": "restricted" })),
+            ),
+            (Method::GET, format!("{path}/permissions"), None),
+            (
+                Method::PUT,
+                format!("{path}/permissions/users/{eve}"),
+                Some(json!({ "role": "use" })),
+            ),
+            (Method::DELETE, path.clone(), None),
+        ] {
+            let (status, _, _) = app
+                .send_as(Some(&token), method.clone(), &target, body)
+                .await;
+            assert_eq!(status, StatusCode::FORBIDDEN, "{method} {target}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_right_can_limit_the_vms_made_from_the_template() {
+        let app = TestApp::new().await;
+        let (id, _) = insert_template(&app, "created").await;
+        let template = format!("{}/{id}", templates(&app));
+        app.send(
+            Method::PATCH,
+            &template,
+            Some(json!({ "visibility": "restricted" })),
+        )
+        .await;
+        let (frank, token) = app.user(&unique("frank"), "user").await;
+        let user_right = format!("{template}/permissions/users/{frank}");
+        let (status, _, _) = app
+            .send(Method::PUT, &user_right, Some(json!({ "max_vms": 1 })))
+            .await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
+        let (status, _, _) = app
+            .send(Method::PUT, &user_right, Some(json!({ "max_vms": -1 })))
+            .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        let create = |name: String| {
+            let token = token.clone();
+            let path = format!("{template}/vms");
+            let app = &app;
+            async move {
+                app.send_as(
+                    Some(&token),
+                    Method::POST,
+                    &path,
+                    Some(json!({ "name": name, "memory_mb": 128, "vcpus": 1 })),
+                )
+                .await
+            }
+        };
+        let (status, _, job) = create(unique("vm")).await;
+        assert_eq!(status, StatusCode::ACCEPTED);
+        let job = app.wait_job(job["id"].as_str().unwrap()).await;
+        assert_eq!(job["status"], "succeeded");
+        let vm_id = job["result"]["id"].as_str().unwrap().to_owned();
+        let (_, json) = app.status_as(&token, Method::GET, &template).await;
+        assert_eq!(json["access"]["max_vms"], 1);
+        assert_eq!(json["access"]["vm_count"], 1);
+
+        let (status, _, json) = create(unique("vm")).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{json}");
+        assert!(json["content"].as_str().unwrap().contains("at most 1"));
+
+        // The most generous right wins: a group of frank's allows 2.
+        let team = group_with(&app, &frank).await;
+        app.send(
+            Method::PUT,
+            &format!("{template}/permissions/groups/{team}"),
+            Some(json!({ "max_vms": 2 })),
+        )
+        .await;
+        let (status, _, job) = create(unique("vm")).await;
+        assert_eq!(status, StatusCode::ACCEPTED);
+        app.wait_job(job["id"].as_str().unwrap()).await;
+        let (status, _, _) = create(unique("vm")).await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        let (_, entries) = app
+            .status_of(Method::GET, &format!("{template}/permissions"))
+            .await;
+        let entry = entries
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|e| e["kind"] == "user")
+            .unwrap();
+        assert_eq!(entry["vm_count"], 2);
+
+        // Deleting a VM gives its slot back.
+        let (status, _) = app.status_as(&token, Method::DELETE, &app.vm(&vm_id)).await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
+        let (status, _, _) = create(unique("vm")).await;
+        assert_eq!(status, StatusCode::ACCEPTED);
+
+        // Admins are not limited.
+        let (status, _, _) = app
+            .send(
+                Method::POST,
+                &format!("{template}/vms"),
+                Some(json!({ "name": unique("vm"), "memory_mb": 128, "vcpus": 1, "owner_id": frank })),
+            )
+            .await;
+        assert_eq!(status, StatusCode::ACCEPTED);
     }
 
     #[tokio::test]
@@ -2769,7 +3511,7 @@ build {
         let (status, _, _) = app
             .send_as(Some(&stranger), Method::POST, &path, Some(body.clone()))
             .await;
-        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert_eq!(status, StatusCode::NOT_FOUND, "no right on the template");
 
         // The template disk counts in the quota of the new VM.
         let (user_id, token) = granted_user(&app).await;

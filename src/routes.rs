@@ -165,12 +165,16 @@ pub fn create_routes(state: SharedState) -> Router {
             post(templates::stop),
         )
         .route(
-            "/api/hypervisors/{hypervisor_id}/templates/{template_id}/access",
-            get(templates::list_access),
+            "/api/hypervisors/{hypervisor_id}/templates/{template_id}/permissions",
+            get(templates::list_permissions),
         )
         .route(
-            "/api/hypervisors/{hypervisor_id}/templates/{template_id}/access/{user_id}",
-            put(templates::grant_access).delete(templates::revoke_access),
+            "/api/hypervisors/{hypervisor_id}/templates/{template_id}/permissions/users/{user_id}",
+            put(templates::set_user_permission).delete(templates::remove_user_permission),
+        )
+        .route(
+            "/api/hypervisors/{hypervisor_id}/templates/{template_id}/permissions/groups/{group_id}",
+            put(templates::set_group_permission).delete(templates::remove_group_permission),
         )
         .route(
             "/api/hypervisors/{hypervisor_id}/templates/{template_id}/vms",

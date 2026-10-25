@@ -1,0 +1,19 @@
+meta {
+  name: Remove user permission
+  type: http
+  seq: 15
+}
+
+delete {
+  url: {{baseUrl}}{{apiPrefix}}/hypervisors/{{hypervisorId}}/templates/{{templateId}}/permissions/users/{{userId}}
+  body: none
+  auth: inherit
+}
+
+assert {
+  res.status: eq 204
+}
+
+docs {
+  Admin only. Removes the user's own right (rights through their groups stay). Their VMs are kept.
+}
