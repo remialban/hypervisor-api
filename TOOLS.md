@@ -50,7 +50,7 @@ cargo test
 |---|---|
 | **KVM** et **QEMU** | La virtualisation elle-même, sur les hyperviseurs. |
 | **libvirt** et **virsh** | Le service qui gère les VM sur chaque hyperviseur, et sa ligne de commande, pratique pour vérifier ce que fait l'API. |
-| **Packer** et **qemu-img** | Construisent les images des templates : Packer installe un système dans une VM temporaire, `qemu-img` prépare le disque. Lancés sur l'hyperviseur. |
+| **Packer** et **qemu-img** | Construisent les images des templates : Packer installe un système dans une VM temporaire, `qemu-img` prépare le disque. Lancés sur l'hyperviseur en SSH (sur la machine de l'API pour `qemu:///system`) : à installer là, pas dans Docker. Voir [INSTALLATION.md](INSTALLATION.md#installer-packer). |
 | **noVNC** et **websockify** | La console des VM dans le navigateur : noVNC est le client web, websockify relaie son WebSocket vers le port VNC de la VM. |
 
 ## Interface web (Angular)

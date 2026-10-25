@@ -3,7 +3,8 @@
 Lancer l'API, les consoles noVNC et l'interface web (`hypervisor-ui`) avec Docker, sur une
 seule machine. Pour le détail, voir [INSTALLATION.md](INSTALLATION.md).
 
-**Il faut :** Docker avec Docker Compose, `git` et `openssl`.
+**Il faut :** Docker avec Docker Compose, `git` et `openssl`. Pour les templates, Packer sur
+l'hyperviseur (voir [plus bas](#templates--installer-packer)).
 
 ## 1. Récupérer les deux projets
 
@@ -87,6 +88,15 @@ sur chacune des trois adresses**, sinon les consoles restent vides.
 Ensuite, dans l'application, ajoutez un hyperviseur : `qemu:///system` pour cette machine,
 ou `qemu+ssh://utilisateur@adresse/system` pour un hyperviseur distant (votre clé SSH doit
 y être autorisée).
+
+## Templates : installer Packer
+
+Les templates sont construits par **Packer**, que l'image Docker de l'API ne contient pas.
+Installez-le **sur l'hyperviseur** (avec `qemu-img`, `virsh` et `xorriso`) : l'API l'y lance
+en SSH. Un hyperviseur ajouté en `qemu:///system` ne peut donc pas construire de templates ;
+pour construire sur cette machine, ajoutez-la plutôt en `qemu+ssh://utilisateur@<son adresse>/system`.
+
+Installation et vérification : [INSTALLATION.md](INSTALLATION.md#installer-packer).
 
 ## Arrêter
 

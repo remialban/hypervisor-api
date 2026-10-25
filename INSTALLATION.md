@@ -50,8 +50,7 @@ En option :
 
 - **noVNC et websockify**, pour ouvrir les consoles des VM : `sudo apt install novnc websockify`
   (Arch : `sudo pacman -S websockify`, et noVNC depuis l'AUR ou <https://github.com/novnc/noVNC>) ;
-- **Packer**, `qemu-img` et `virsh`, pour construire des templates : voir
-  <https://developer.hashicorp.com/packer/install>.
+- **Packer**, pour construire des templates : voir [Installer Packer](#installer-packer).
 
 ### 2. Compiler et lancer l'API
 
@@ -504,14 +503,85 @@ Pour chaque hyperviseur distant, joint en `qemu+ssh://utilisateur@adresse/system
    virsh -c qemu:///system net-list --all
    ```
 
-6. **Pour construire des templates** : `packer`, `qemu-img`, `virsh` et, pour les images
-   cloud-init, `xorriso` sur l'hyperviseur. Packer y est lancé en SSH. Pour un hyperviseur
-   local (`qemu:///system`), Packer tourne là où tourne l'API.
+6. **Pour construire des templates** : Packer, voir [Installer Packer](#installer-packer)
+   ci-dessous.
 
 7. **Pour les consoles** : le port VNC des VM (5900-5999) doit être joignable depuis le
    conteneur noVNC. Ce port n'a pas de mot de passe : filtrez-le pour qu'il ne soit
    joignable **que** depuis la machine Docker, et réglez `VNC_LISTEN` sur l'adresse de
    l'hyperviseur qu'elle utilise.
+
+## Installer Packer
+
+Packer ne sert qu'aux **templates** : sans lui, tout le reste marche, mais chaque build de
+template échoue (`packer: command not found` dans son log).
+
+### Où l'installer
+
+Packer est lancé par l'API sur **la machine qui construit le template**, et cette machine
+dépend de l'adresse de l'hyperviseur :
+
+| Adresse de l'hyperviseur | Packer est lancé… | Il faut l'installer… |
+|---|---|---|
+| `qemu+ssh://utilisateur@adresse/system` | sur l'hyperviseur, en SSH, avec cet utilisateur | **sur l'hyperviseur** |
+| `qemu:///system` (local) | là où tourne l'API | **sur la machine de l'API** (option 1) |
+
+**Avec Docker (option 2)**, l'image de l'API ne contient **pas** Packer : un hyperviseur en
+`qemu:///system` ne peut pas construire de templates. Pour construire sur la machine Docker
+elle-même, ajoutez-la en SSH, `qemu+ssh://utilisateur@<adresse de la machine>/system`, après
+l'avoir préparée comme un hyperviseur distant (voir [Préparer un
+hyperviseur](#préparer-un-hyperviseur)) : Packer s'y lance alors en SSH, hors du conteneur.
+
+Il n'y a rien à installer sur la machine de l'API pour les hyperviseurs distants.
+
+### Ce qu'il faut sur cette machine
+
+| Outil | Pourquoi |
+|---|---|
+| `packer` | construit l'image ; il doit être dans le `PATH` d'une connexion SSH non interactive (`/usr/bin`, pas seulement dans `~/.bashrc`) |
+| `qemu-system-x86_64` et `/dev/kvm` | la VM temporaire du build, accélérée par KVM |
+| `qemu-img` | vérifie et convertit le disque produit |
+| `virsh` | envoie le disque dans le pool de l'hyperviseur |
+| `xorriso` | crée le disque cloud-init (`cd_content`) des configurations d'exemple |
+| un accès Internet | `packer init` télécharge le plugin `qemu`, le build télécharge l'image de départ |
+| de la place dans `/var/tmp` | le build y travaille ; comptez deux fois la taille du disque (`disk_size`) |
+
+L'utilisateur qui lance Packer doit pouvoir utiliser `/dev/kvm` (groupe `kvm`) et libvirt
+(groupe `libvirt`).
+
+### Installation
+
+Debian / Ubuntu (dépôt HashiCorp) :
+
+```bash
+wget -O- https://apt.releases.hashicorp.com/gpg | sudo gpg --dearmor -o /usr/share/keyrings/hashicorp-archive-keyring.gpg
+echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $(lsb_release -cs) main" \
+  | sudo tee /etc/apt/sources.list.d/hashicorp.list
+sudo apt update && sudo apt install packer qemu-system-x86 qemu-utils libvirt-clients xorriso
+sudo usermod -aG kvm,libvirt utilisateur
+```
+
+Arch Linux :
+
+```bash
+sudo pacman -S packer qemu-full libvirt libisoburn   # libisoburn fournit xorriso
+sudo usermod -aG kvm,libvirt utilisateur
+```
+
+Autres systèmes : <https://developer.hashicorp.com/packer/install>.
+
+### Vérifier
+
+Depuis la machine de l'API (ou depuis le conteneur : `docker compose exec api sh`), pour un
+hyperviseur distant :
+
+```bash
+ssh utilisateur@adresse 'packer version && qemu-img --version && xorriso -version | head -1 && test -w /dev/kvm && echo kvm ok'
+```
+
+Un exemple de configuration est dans [docs/packer/ubuntu-24.04.pkr.hcl](docs/packer/ubuntu-24.04.pkr.hcl)
+(Ubuntu 24.04, compte `ubuntu` / `ubuntu`), à mettre dans `packer_config` avec
+`disk_name` = `ubuntu-24.04.qcow2`.
 
 ---
 
