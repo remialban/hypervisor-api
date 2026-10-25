@@ -2,6 +2,9 @@
 
 API Rust avec Axum pour enregistrer plusieurs hyperviseurs KVM et gerer leurs ressources.
 
+**Pour installer et lancer le projet (développement ou Docker), suivez
+[INSTALLATION.md](INSTALLATION.md).**
+
 ## Fonctionnalites
 
 - CRUD des hyperviseurs dans SQLite.
