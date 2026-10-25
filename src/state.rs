@@ -1,11 +1,11 @@
 use std::{collections::HashMap, sync::Arc};
 
-use sqlx::{SqlitePool, sqlite::SqlitePoolOptions};
+use sqlx::{PgPool, postgres::PgPoolOptions};
 
 use crate::{config::Config, jobs::JobRegistry};
 
 pub struct AppState {
-    pub db: SqlitePool,
+    pub db: PgPool,
     pub jobs: JobRegistry,
     pub config: Config,
     /// Failed logins per username: (count, time of the first failure).
@@ -24,7 +24,7 @@ impl AppState {
     }
 
     pub async fn with_config(database_url: &str, config: Config) -> Result<Self, sqlx::Error> {
-        let db = SqlitePoolOptions::new()
+        let db = PgPoolOptions::new()
             .max_connections(5)
             .connect(database_url)
             .await?;

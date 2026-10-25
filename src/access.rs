@@ -14,7 +14,7 @@
 use std::ops::Add;
 
 use serde::{Deserialize, Serialize};
-use sqlx::SqlitePool;
+use sqlx::PgPool;
 use utoipa::ToSchema;
 use uuid::Uuid;
 
@@ -71,18 +71,19 @@ pub async fn vm_access(
         return Ok(VmAccess::Admin);
     }
     let vm_id = parse_vm_id(vm_id)?;
-    let owner: Option<String> =
-        sqlx::query_scalar("SELECT owner_id FROM vm_owners WHERE hypervisor_id = ? AND vm_id = ?")
-            .bind(hypervisor_id)
-            .bind(&vm_id)
-            .fetch_optional(&state.db)
-            .await?;
+    let owner: Option<String> = sqlx::query_scalar(
+        "SELECT owner_id FROM vm_owners WHERE hypervisor_id = $1 AND vm_id = $2",
+    )
+    .bind(hypervisor_id)
+    .bind(&vm_id)
+    .fetch_optional(&state.db)
+    .await?;
     if owner.as_deref() == Some(user.id.as_str()) {
         return Ok(VmAccess::Owner);
     }
     let shared: Option<i64> = sqlx::query_scalar(
-        "SELECT 1 FROM vm_shares WHERE hypervisor_id = ? AND vm_id = ? AND user_id = ?
-         AND (expires_at IS NULL OR expires_at > ?)",
+        "SELECT 1::BIGINT FROM vm_shares WHERE hypervisor_id = $1 AND vm_id = $2 AND user_id = $3
+         AND (expires_at IS NULL OR expires_at > $4)",
     )
     .bind(hypervisor_id)
     .bind(&vm_id)
@@ -99,14 +100,14 @@ pub async fn vm_access(
 
 /// Owner (id, username) of a VM, if it has one.
 pub async fn owner_of(
-    db: &SqlitePool,
+    db: &PgPool,
     hypervisor_id: &str,
     vm_id: &str,
 ) -> Result<Option<(String, String)>, ApiError> {
     let vm_id = parse_vm_id(vm_id)?;
     Ok(sqlx::query_as(
         "SELECT u.id, u.username FROM vm_owners o JOIN users u ON u.id = o.owner_id
-         WHERE o.hypervisor_id = ? AND o.vm_id = ?",
+         WHERE o.hypervisor_id = $1 AND o.vm_id = $2",
     )
     .bind(hypervisor_id)
     .bind(vm_id)
@@ -144,14 +145,14 @@ pub async fn visible_vms(
 ) -> Result<Vec<VirtualMachine>, ApiError> {
     let owners: Vec<(String, String, String)> = sqlx::query_as(
         "SELECT o.vm_id, o.owner_id, u.username FROM vm_owners o JOIN users u ON u.id = o.owner_id
-         WHERE o.hypervisor_id = ?",
+         WHERE o.hypervisor_id = $1",
     )
     .bind(hypervisor_id)
     .fetch_all(&state.db)
     .await?;
     let shared: Vec<String> = sqlx::query_scalar(
-        "SELECT vm_id FROM vm_shares WHERE hypervisor_id = ? AND user_id = ?
-         AND (expires_at IS NULL OR expires_at > ?)",
+        "SELECT vm_id FROM vm_shares WHERE hypervisor_id = $1 AND user_id = $2
+         AND (expires_at IS NULL OR expires_at > $3)",
     )
     .bind(hypervisor_id)
     .bind(&user.id)
@@ -189,7 +190,7 @@ pub async fn record_owner(
     let vm_id = parse_vm_id(vm_id)?;
     sqlx::query(
         "INSERT INTO vm_owners (hypervisor_id, vm_id, owner_id, vcpus, memory_mb, disk_gb, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
          ON CONFLICT (hypervisor_id, vm_id) DO UPDATE SET owner_id = excluded.owner_id",
     )
     .bind(hypervisor_id)
@@ -209,7 +210,7 @@ pub async fn forget_vm(state: &SharedState, hypervisor_id: &str, vm_id: &str) {
     let Ok(vm_id) = parse_vm_id(vm_id) else {
         return;
     };
-    if let Err(error) = sqlx::query("DELETE FROM vm_owners WHERE hypervisor_id = ? AND vm_id = ?")
+    if let Err(error) = sqlx::query("DELETE FROM vm_owners WHERE hypervisor_id = $1 AND vm_id = $2")
         .bind(hypervisor_id)
         .bind(vm_id)
         .execute(&state.db)
@@ -230,7 +231,7 @@ pub async fn prune_missing(
     listed_at: i64,
 ) {
     let known: Result<Vec<String>, _> = sqlx::query_scalar(
-        "SELECT vm_id FROM vm_owners WHERE hypervisor_id = ? AND created_at < ?",
+        "SELECT vm_id FROM vm_owners WHERE hypervisor_id = $1 AND created_at < $2",
     )
     .bind(hypervisor_id)
     .bind(listed_at)
@@ -242,7 +243,7 @@ pub async fn prune_missing(
             continue;
         }
         if let Err(error) =
-            sqlx::query("DELETE FROM vm_owners WHERE hypervisor_id = ? AND vm_id = ?")
+            sqlx::query("DELETE FROM vm_owners WHERE hypervisor_id = $1 AND vm_id = $2")
                 .bind(hypervisor_id)
                 .bind(&vm_id)
                 .execute(&state.db)
@@ -265,7 +266,7 @@ pub async fn require_grant(
         return Ok(());
     }
     let granted: Option<i64> = sqlx::query_scalar(
-        "SELECT 1 FROM hypervisor_access WHERE user_id = ? AND hypervisor_id = ?",
+        "SELECT 1::BIGINT FROM hypervisor_access WHERE user_id = $1 AND hypervisor_id = $2",
     )
     .bind(&user.id)
     .bind(hypervisor_id)
@@ -282,9 +283,9 @@ pub async fn require_grant(
 
 /// Hypervisors a non-admin can see: the ones they were granted, and the ones hosting a
 /// VM they own or that was lent to them.
-pub const VISIBLE_HYPERVISORS: &str = "SELECT hypervisor_id FROM hypervisor_access WHERE user_id = ?1
-    UNION SELECT hypervisor_id FROM vm_owners WHERE owner_id = ?1
-    UNION SELECT hypervisor_id FROM vm_shares WHERE user_id = ?1 AND (expires_at IS NULL OR expires_at > ?2)";
+pub const VISIBLE_HYPERVISORS: &str = "SELECT hypervisor_id FROM hypervisor_access WHERE user_id = $1
+    UNION SELECT hypervisor_id FROM vm_owners WHERE owner_id = $1
+    UNION SELECT hypervisor_id FROM vm_shares WHERE user_id = $1 AND (expires_at IS NULL OR expires_at > $2)";
 
 /// Whether the caller may see this hypervisor at all.
 pub async fn hypervisor_visible(
@@ -296,7 +297,7 @@ pub async fn hypervisor_visible(
         return Ok(true);
     }
     let found: Option<String> = sqlx::query_scalar(&format!(
-        "SELECT id FROM hypervisors WHERE id = ?3 AND id IN ({VISIBLE_HYPERVISORS})"
+        "SELECT id FROM hypervisors WHERE id = $3 AND id IN ({VISIBLE_HYPERVISORS})"
     ))
     .bind(&user.id)
     .bind(now())
@@ -351,9 +352,9 @@ impl Usage {
     }
 }
 
-pub async fn quota_of(db: &SqlitePool, user_id: &str) -> Result<Quota, ApiError> {
+pub async fn quota_of(db: &PgPool, user_id: &str) -> Result<Quota, ApiError> {
     sqlx::query_as::<_, Quota>(
-        "SELECT max_vms, max_vcpus, max_memory_mb, max_disk_gb FROM users WHERE id = ?",
+        "SELECT max_vms, max_vcpus, max_memory_mb, max_disk_gb FROM users WHERE id = $1",
     )
     .bind(user_id)
     .fetch_optional(db)
@@ -361,10 +362,10 @@ pub async fn quota_of(db: &SqlitePool, user_id: &str) -> Result<Quota, ApiError>
     .ok_or_else(|| ApiError::NotFound("User not found".into()))
 }
 
-pub async fn usage_of(db: &SqlitePool, user_id: &str) -> Result<Usage, ApiError> {
+pub async fn usage_of(db: &PgPool, user_id: &str) -> Result<Usage, ApiError> {
     let (vms, vcpus, memory_mb, disk_gb): (i64, i64, i64, i64) = sqlx::query_as(
-        "SELECT COUNT(*), COALESCE(SUM(vcpus), 0), COALESCE(SUM(memory_mb), 0), COALESCE(SUM(disk_gb), 0)
-         FROM vm_owners WHERE owner_id = ?",
+        "SELECT COUNT(*), COALESCE(SUM(vcpus), 0)::BIGINT, COALESCE(SUM(memory_mb), 0)::BIGINT, COALESCE(SUM(disk_gb), 0)::BIGINT
+         FROM vm_owners WHERE owner_id = $1",
     )
     .bind(user_id)
     .fetch_one(db)

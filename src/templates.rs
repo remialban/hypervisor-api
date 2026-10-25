@@ -375,7 +375,7 @@ pub async fn list(
     fail_interrupted(&state).await?;
     let caller = Caller::of(&state, &user, &hypervisor_id).await?;
     let rows = sqlx::query_as::<_, TemplateRow>(&format!(
-        "SELECT {TEMPLATE_COLUMNS} FROM templates t WHERE t.hypervisor_id = ? ORDER BY t.name"
+        "SELECT {TEMPLATE_COLUMNS} FROM templates t WHERE t.hypervisor_id = $1 ORDER BY t.name"
     ))
     .bind(&hypervisor_id)
     .fetch_all(&state.db)
@@ -427,7 +427,7 @@ pub async fn create(
     let created_at = now();
     sqlx::query(
         "INSERT INTO templates (id, hypervisor_id, name, packer_config, disk_name, pool, visibility, allow_vm_creation, created_by, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
     )
     .bind(&id)
     .bind(&hypervisor_id)
@@ -444,7 +444,7 @@ pub async fn create(
     .await
     .map_err(name_conflict)?;
     if let Err(error) = start_build(&state, &user, &hypervisor_id, &uri, &id).await {
-        sqlx::query("DELETE FROM templates WHERE id = ?")
+        sqlx::query("DELETE FROM templates WHERE id = $1")
             .bind(&id)
             .execute(&state.db)
             .await?;
@@ -486,8 +486,8 @@ pub async fn update(
     };
     definition.validate()?;
     sqlx::query(
-        "UPDATE templates SET name = ?, packer_config = ?, disk_name = ?, pool = ?, visibility = ?, allow_vm_creation = ?, updated_at = ?
-         WHERE id = ?",
+        "UPDATE templates SET name = $1, packer_config = $2, disk_name = $3, pool = $4, visibility = $5, allow_vm_creation = $6, updated_at = $7
+         WHERE id = $8",
     )
     .bind(&definition.name)
     .bind(&definition.packer_config)
@@ -528,7 +528,7 @@ pub async fn delete(
         ));
     }
     let disks: Vec<(String, String)> =
-        sqlx::query_as("SELECT pool, volume FROM template_versions WHERE template_id = ?")
+        sqlx::query_as("SELECT pool, volume FROM template_versions WHERE template_id = $1")
             .bind(&row.id)
             .fetch_all(&state.db)
             .await?;
@@ -539,7 +539,7 @@ pub async fn delete(
         Ok(())
     })
     .await?;
-    sqlx::query("DELETE FROM templates WHERE id = ?")
+    sqlx::query("DELETE FROM templates WHERE id = $1")
         .bind(&row.id)
         .execute(&state.db)
         .await?;
@@ -565,7 +565,7 @@ pub async fn list_versions(
     fail_interrupted(&state).await?;
     let (row, rights) = find_template(&state, &user, &hypervisor_id, &template_id).await?;
     let versions = sqlx::query_as::<_, TemplateVersion>(&format!(
-        "SELECT {VERSION_COLUMNS} FROM template_versions WHERE template_id = ?1 AND (?2 OR status = 'created')
+        "SELECT {VERSION_COLUMNS} FROM template_versions WHERE template_id = $1 AND ($2 OR status = 'created')
          ORDER BY version DESC"
     ))
     .bind(&row.id)
@@ -637,7 +637,7 @@ pub async fn delete_version(
     }
     let (pool, volume) = (version.pool.clone(), version.volume.clone());
     blocking(move || delete_volume(&uri, &pool, &volume)).await?;
-    sqlx::query("DELETE FROM template_versions WHERE template_id = ? AND version = ?")
+    sqlx::query("DELETE FROM template_versions WHERE template_id = $1 AND version = $2")
         .bind(&row.id)
         .bind(version.version)
         .execute(&state.db)
@@ -671,7 +671,7 @@ pub async fn logs(
         Some(control) => control.log().text.clone(),
         None => {
             sqlx::query_scalar(
-                "SELECT log FROM template_versions WHERE template_id = ? AND version = ?",
+                "SELECT log FROM template_versions WHERE template_id = $1 AND version = $2",
             )
             .bind(&row.id)
             .bind(version.version)
@@ -729,7 +729,7 @@ pub async fn stop(
     });
     sqlx::query(
         "UPDATE template_versions SET status = 'stopping'
-         WHERE template_id = ? AND version = ? AND status IN ('pending', 'in_progress')",
+         WHERE template_id = $1 AND version = $2 AND status IN ('pending', 'in_progress')",
     )
     .bind(&row.id)
     .bind(number)
@@ -768,10 +768,10 @@ pub async fn list_permissions(
     let (row, _) = find_template(&state, &user, &hypervisor_id, &template_id).await?;
     let entries = sqlx::query_as::<_, PermissionRow>(
         "SELECT 'user' AS kind, p.user_id AS id, u.username AS name, p.role, p.max_vms, p.created_at, p.updated_at
-         FROM template_permissions p JOIN users u ON u.id = p.user_id WHERE p.template_id = ?1
+         FROM template_permissions p JOIN users u ON u.id = p.user_id WHERE p.template_id = $1
          UNION ALL
          SELECT 'group', p.group_id, g.name, p.role, p.max_vms, p.created_at, p.updated_at
-         FROM template_permissions p JOIN user_groups g ON g.id = p.group_id WHERE p.template_id = ?1
+         FROM template_permissions p JOIN user_groups g ON g.id = p.group_id WHERE p.template_id = $1
          ORDER BY 1 DESC, 3",
     )
     .bind(&row.id)
@@ -822,7 +822,7 @@ pub async fn set_user_permission(
 ) -> Result<StatusCode, ApiError> {
     user.require_admin()?;
     let (row, _) = find_template(&state, &user, &hypervisor_id, &template_id).await?;
-    let name: Option<String> = sqlx::query_scalar("SELECT username FROM users WHERE id = ?")
+    let name: Option<String> = sqlx::query_scalar("SELECT username FROM users WHERE id = $1")
         .bind(&user_id)
         .fetch_optional(&state.db)
         .await?;
@@ -848,7 +848,7 @@ pub async fn set_group_permission(
 ) -> Result<StatusCode, ApiError> {
     user.require_admin()?;
     let (row, _) = find_template(&state, &user, &hypervisor_id, &template_id).await?;
-    let name: Option<String> = sqlx::query_scalar("SELECT name FROM user_groups WHERE id = ?")
+    let name: Option<String> = sqlx::query_scalar("SELECT name FROM user_groups WHERE id = $1")
         .bind(&group_id)
         .fetch_optional(&state.db)
         .await?;
@@ -929,7 +929,7 @@ async fn set_permission(
     let at = now();
     sqlx::query(&format!(
         "INSERT INTO template_permissions (template_id, {column}, role, max_vms, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?)
+         VALUES ($1, $2, $3, $4, $5, $6)
          ON CONFLICT (template_id, {column}) WHERE {column} IS NOT NULL
          DO UPDATE SET role = excluded.role, max_vms = excluded.max_vms, updated_at = excluded.updated_at"
     ))
@@ -956,7 +956,7 @@ async fn remove_permission(
     let (row, _) = find_template(state, user, hypervisor_id, template_id).await?;
     let column = principal.column();
     let result = sqlx::query(&format!(
-        "DELETE FROM template_permissions WHERE template_id = ? AND {column} = ?"
+        "DELETE FROM template_permissions WHERE template_id = $1 AND {column} = $2"
     ))
     .bind(&row.id)
     .bind(principal_id)
@@ -1005,7 +1005,7 @@ pub async fn create_vm(
         Some(number) => find_version(&state, rights.manages(), &row.id, number).await?,
         None => {
             let latest: Option<i64> = sqlx::query_scalar(
-                "SELECT MAX(version) FROM template_versions WHERE template_id = ? AND status = 'created'",
+                "SELECT MAX(version) FROM template_versions WHERE template_id = $1 AND status = 'created'",
             )
             .bind(&row.id)
             .fetch_one(&state.db)
@@ -1130,7 +1130,7 @@ async fn find_template(
 ) -> Result<(TemplateRow, Rights), ApiError> {
     let not_found = || ApiError::NotFound("Template not found".into());
     let row = sqlx::query_as::<_, TemplateRow>(&format!(
-        "SELECT {TEMPLATE_COLUMNS} FROM templates t WHERE t.hypervisor_id = ? AND t.id = ?"
+        "SELECT {TEMPLATE_COLUMNS} FROM templates t WHERE t.hypervisor_id = $1 AND t.id = $2"
     ))
     .bind(hypervisor_id)
     .bind(template_id)
@@ -1155,7 +1155,7 @@ async fn find_version(
 ) -> Result<TemplateVersion, ApiError> {
     sqlx::query_as::<_, TemplateVersion>(&format!(
         "SELECT {VERSION_COLUMNS} FROM template_versions
-         WHERE template_id = ?1 AND version = ?2 AND (?3 OR status = 'created')"
+         WHERE template_id = $1 AND version = $2 AND ($3 OR status = 'created')"
     ))
     .bind(template_id)
     .bind(version)
@@ -1167,7 +1167,7 @@ async fn find_version(
 
 async fn building_version(state: &SharedState, template_id: &str) -> Result<Option<i64>, ApiError> {
     Ok(sqlx::query_scalar(&format!(
-        "SELECT version FROM template_versions WHERE template_id = ? AND status IN {BUILDING}"
+        "SELECT version FROM template_versions WHERE template_id = $1 AND status IN {BUILDING}"
     ))
     .bind(template_id)
     .fetch_optional(&state.db)
@@ -1181,7 +1181,7 @@ async fn view(
     rights: Rights,
 ) -> Result<Template, ApiError> {
     let latest = sqlx::query_as::<_, TemplateVersion>(&format!(
-        "SELECT {VERSION_COLUMNS} FROM template_versions WHERE template_id = ?1 AND (?2 OR status = 'created')
+        "SELECT {VERSION_COLUMNS} FROM template_versions WHERE template_id = $1 AND ($2 OR status = 'created')
          ORDER BY version DESC LIMIT 1"
     ))
     .bind(&row.id)
@@ -1189,7 +1189,7 @@ async fn view(
     .fetch_optional(&state.db)
     .await?;
     let default_version: Option<i64> = sqlx::query_scalar(
-        "SELECT MAX(version) FROM template_versions WHERE template_id = ? AND status = 'created'",
+        "SELECT MAX(version) FROM template_versions WHERE template_id = $1 AND status = 'created'",
     )
     .bind(&row.id)
     .fetch_one(&state.db)
@@ -1334,7 +1334,7 @@ impl<'a> Caller<'a> {
             }));
         }
         let entries = sqlx::query_as::<_, RightRow>(
-            "SELECT user_id, group_id, role, max_vms FROM template_permissions WHERE template_id = ?",
+            "SELECT user_id, group_id, role, max_vms FROM template_permissions WHERE template_id = $1",
         )
         .bind(&row.id)
         .fetch_all(&state.db)
@@ -1363,7 +1363,7 @@ impl<'a> Caller<'a> {
             && !found.manages()
         {
             let built: Option<i64> = sqlx::query_scalar(
-                "SELECT 1 FROM template_versions WHERE template_id = ? AND status = 'created' LIMIT 1",
+                "SELECT 1::BIGINT FROM template_versions WHERE template_id = $1 AND status = 'created' LIMIT 1",
             )
             .bind(&row.id)
             .fetch_optional(&state.db)
@@ -1381,7 +1381,7 @@ async fn vms_from(state: &SharedState, template_id: &str, owner_id: &str) -> Res
     Ok(sqlx::query_scalar(
         "SELECT COUNT(*) FROM template_vms tv
          JOIN vm_owners o ON o.hypervisor_id = tv.hypervisor_id AND o.vm_id = tv.vm_id
-         WHERE tv.template_id = ? AND o.owner_id = ?",
+         WHERE tv.template_id = $1 AND o.owner_id = $2",
     )
     .bind(template_id)
     .bind(owner_id)
@@ -1398,8 +1398,10 @@ async fn record_origin(
     version: i64,
 ) -> Result<(), ApiError> {
     sqlx::query(
-        "INSERT OR REPLACE INTO template_vms (hypervisor_id, vm_id, template_id, version, created_at)
-         VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO template_vms (hypervisor_id, vm_id, template_id, version, created_at)
+         VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT (hypervisor_id, vm_id) DO UPDATE
+         SET template_id = excluded.template_id, version = excluded.version, created_at = excluded.created_at",
     )
     .bind(hypervisor_id)
     .bind(access::parse_vm_id(vm_id)?)
@@ -1460,7 +1462,7 @@ async fn owner_of_new_vm(
     };
     user.require_admin()?;
     let exists: Option<i64> =
-        sqlx::query_scalar("SELECT 1 FROM users WHERE id = ? AND disabled = 0")
+        sqlx::query_scalar("SELECT 1::BIGINT FROM users WHERE id = $1 AND NOT disabled")
             .bind(owner_id)
             .fetch_optional(&state.db)
             .await?;
@@ -1659,9 +1661,9 @@ async fn start_build(
     // build of the same template.
     let inserted: Option<(i64, String)> = sqlx::query_as(
         "INSERT INTO template_versions (template_id, version, packer_config, disk_name, pool, volume, status, created_by, created_at)
-         SELECT t.id, n.v, t.packer_config, t.disk_name, t.pool, 'template-' || t.name || '-v' || n.v || '.qcow2', 'pending', ?2, ?3
-         FROM templates t, (SELECT COALESCE(MAX(version), 0) + 1 AS v FROM template_versions WHERE template_id = ?1) n
-         WHERE t.id = ?1
+         SELECT t.id, n.v, t.packer_config, t.disk_name, t.pool, 'template-' || t.name || '-v' || n.v || '.qcow2', 'pending', $2, $3
+         FROM templates t, (SELECT COALESCE(MAX(version), 0) + 1 AS v FROM template_versions WHERE template_id = $1) n
+         WHERE t.id = $1
          RETURNING version, volume",
     )
     .bind(template_id)
@@ -1694,7 +1696,7 @@ async fn start_build(
     let script = match prepared {
         Ok(script) => script,
         Err(error) => {
-            sqlx::query("DELETE FROM template_versions WHERE template_id = ? AND version = ?")
+            sqlx::query("DELETE FROM template_versions WHERE template_id = $1 AND version = $2")
                 .bind(template_id)
                 .bind(number)
                 .execute(&state.db)
@@ -1886,8 +1888,8 @@ async fn build(state: SharedState, build: Build, control: Arc<BuildControl>) {
         ),
     };
     let saved = sqlx::query(
-        "UPDATE template_versions SET status = ?, disk_size_gb = ?, error = ?, log = ?, finished_at = ?
-         WHERE template_id = ? AND version = ?",
+        "UPDATE template_versions SET status = $1, disk_size_gb = $2, error = $3, log = $4, finished_at = $5
+         WHERE template_id = $6 AND version = $7",
     )
     .bind(status)
     .bind(size_gb)
@@ -1928,8 +1930,8 @@ async fn run_build(state: &SharedState, build: &Build, control: &Arc<BuildContro
         return Outcome::Cancelled;
     }
     let started = sqlx::query(
-        "UPDATE template_versions SET status = 'in_progress', started_at = ?
-         WHERE template_id = ? AND version = ? AND status = 'pending'",
+        "UPDATE template_versions SET status = 'in_progress', started_at = $1
+         WHERE template_id = $2 AND version = $3 AND status = 'pending'",
     )
     .bind(now())
     .bind(&build.template_id)
@@ -2084,13 +2086,14 @@ async fn flush_log(
         }
         log.text.clone()
     };
-    let saved =
-        sqlx::query("UPDATE template_versions SET log = ? WHERE template_id = ? AND version = ?")
-            .bind(&text)
-            .bind(&build.template_id)
-            .bind(build.version)
-            .execute(&state.db)
-            .await;
+    let saved = sqlx::query(
+        "UPDATE template_versions SET log = $1 WHERE template_id = $2 AND version = $3",
+    )
+    .bind(&text)
+    .bind(&build.template_id)
+    .bind(build.version)
+    .execute(&state.db)
+    .await;
     match saved {
         Ok(_) => text.len(),
         Err(error) => {
@@ -2231,8 +2234,8 @@ fn tail(text: &str, max_chars: usize) -> String {
 /// previous run of the API: it was interrupted and never ends.
 async fn fail_interrupted(state: &SharedState) -> Result<(), ApiError> {
     sqlx::query(&format!(
-        "UPDATE template_versions SET status = 'failed', error = 'The build was interrupted by a restart of the API', finished_at = ?
-         WHERE status IN {BUILDING} AND created_at < ?"
+        "UPDATE template_versions SET status = 'failed', error = 'The build was interrupted by a restart of the API', finished_at = $1
+         WHERE status IN {BUILDING} AND created_at < $2"
     ))
     .bind(now())
     .bind(*STARTED_AT)
@@ -2581,7 +2584,7 @@ mod tests {
         let id = Uuid::new_v4().to_string();
         sqlx::query(
             "INSERT INTO templates (id, hypervisor_id, name, packer_config, disk_name, pool, created_at, updated_at)
-             VALUES (?, ?, ?, 'source \"null\" \"x\" {}', 'disk.qcow2', ?, 0, 0)",
+             VALUES ($1, $2, $3, 'source \"null\" \"x\" {}', 'disk.qcow2', $4, 0, 0)",
         )
         .bind(&id)
         .bind(&app.hypervisor_id)
@@ -2608,7 +2611,7 @@ mod tests {
         }
         sqlx::query(
             "INSERT INTO template_versions (template_id, version, packer_config, disk_name, pool, volume, status, disk_size_gb, created_at)
-             VALUES (?, ?, 'source \"null\" \"x\" {}', 'disk.qcow2', ?, ?, ?, 1, ?)",
+             VALUES ($1, $2, 'source \"null\" \"x\" {}', 'disk.qcow2', $3, $4, $5, 1, $6)",
         )
         .bind(template_id)
         .bind(version)
@@ -3434,7 +3437,7 @@ build {
         let (status, vm) = app.status_as(&token, Method::GET, &app.vm(vm_id)).await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(vm["name"], name.as_str());
-        let owner: String = sqlx::query_scalar("SELECT owner_id FROM vm_owners WHERE vm_id = ?")
+        let owner: String = sqlx::query_scalar("SELECT owner_id FROM vm_owners WHERE vm_id = $1")
             .bind(vm_id)
             .fetch_one(&app.state.db)
             .await
@@ -3515,7 +3518,7 @@ build {
 
         // The template disk counts in the quota of the new VM.
         let (user_id, token) = granted_user(&app).await;
-        sqlx::query("UPDATE users SET max_disk_gb = 0 WHERE id = ?")
+        sqlx::query("UPDATE users SET max_disk_gb = 0 WHERE id = $1")
             .bind(&user_id)
             .execute(&app.state.db)
             .await

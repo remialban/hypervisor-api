@@ -1,4 +1,4 @@
-use sqlx::SqlitePool;
+use sqlx::PgPool;
 use std::collections::HashMap;
 use uuid::Uuid;
 
@@ -17,15 +17,15 @@ use crate::{
     vm_xml,
 };
 
-/// Reads the libvirt URI of a hypervisor from SQLite.
-pub async fn hypervisor_uri(db: &SqlitePool, hypervisor_id: &str) -> Result<String, ApiError> {
-    sqlx::query_scalar::<_, String>("SELECT uri FROM hypervisors WHERE id = ?")
+/// Reads the libvirt URI of a hypervisor from the database.
+pub async fn hypervisor_uri(db: &PgPool, hypervisor_id: &str) -> Result<String, ApiError> {
+    sqlx::query_scalar::<_, String>("SELECT uri FROM hypervisors WHERE id = $1")
         .bind(hypervisor_id)
         .fetch_optional(db)
         .await
         .map_err(|e| {
-            eprintln!("SQLite read failed: {e}");
-            ApiError::Internal("SQLite read failed".into())
+            eprintln!("Database read failed: {e}");
+            ApiError::Internal("Database read failed".into())
         })?
         .ok_or_else(|| ApiError::NotFound("Hypervisor not found".into()))
 }

@@ -22,6 +22,28 @@ use crate::{auth, config::Config, routes, state::AppState};
 
 pub(crate) const POOL: &str = "default-pool";
 
+/// PostgreSQL used by the tests. Every test gets its own empty schema in it: the database
+/// is disposable, never point this at real data.
+const DEFAULT_TEST_DATABASE_URL: &str = "postgres://postgres:test@127.0.0.1:55432/hypervisor_test";
+
+/// The URL of a new, empty schema of the test database (`TEST_DATABASE_URL`).
+pub(crate) async fn fresh_database() -> String {
+    let base =
+        std::env::var("TEST_DATABASE_URL").unwrap_or_else(|_| DEFAULT_TEST_DATABASE_URL.to_owned());
+    let schema = format!("test_{}", Uuid::new_v4().simple());
+    let mut conn = <sqlx::PgConnection as sqlx::Connection>::connect(&base)
+        .await
+        .unwrap_or_else(|e| {
+            panic!("tests need PostgreSQL at TEST_DATABASE_URL ({base}): {e} (see INSTALLATION.md)")
+        });
+    sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        .execute(&mut conn)
+        .await
+        .unwrap();
+    let separator = if base.contains('?') { '&' } else { '?' };
+    format!("{base}{separator}options=-c%20search_path%3D{schema}")
+}
+
 // ---------- HTTP helpers ----------
 
 pub(crate) struct TestApp {
@@ -33,12 +55,9 @@ pub(crate) struct TestApp {
 }
 
 impl TestApp {
-    /// A fresh API with its own in-memory SQLite and one hypervisor using the test driver.
+    /// A fresh API with its own empty database schema and one hypervisor using the test driver.
     pub(crate) async fn new() -> Self {
-        let db_url = format!(
-            "sqlite:file:{}?mode=memory&cache=shared",
-            Uuid::new_v4().simple()
-        );
+        let db_url = fresh_database().await;
         let config = Config {
             vnc_token_file: std::env::temp_dir().join(format!("vm-{}.cfg", Uuid::new_v4())),
             ..Config::default()
@@ -46,11 +65,11 @@ impl TestApp {
         let state = Arc::new(
             AppState::with_config(&db_url, config)
                 .await
-                .expect("in-memory SQLite"),
+                .expect("test database"),
         );
         let (_, admin_token) = insert_user(&state, "root-test", "admin").await;
         let hypervisor_id = Uuid::new_v4().to_string();
-        sqlx::query("INSERT INTO hypervisors (id, name, uri, status) VALUES (?, 'test', 'test:///default', 'connected')")
+        sqlx::query("INSERT INTO hypervisors (id, name, uri, status) VALUES ($1, 'test', 'test:///default', 'connected')")
             .bind(&hypervisor_id)
             .execute(&state.db)
             .await
@@ -164,7 +183,7 @@ impl TestApp {
 
 async fn insert_user(state: &Arc<AppState>, username: &str, role: &str) -> (String, String) {
     let id = Uuid::new_v4().to_string();
-    sqlx::query("INSERT INTO users (id, username, password_hash, role, created_at) VALUES (?, ?, 'x', ?, 0)")
+    sqlx::query("INSERT INTO users (id, username, password_hash, role, created_at) VALUES ($1, $2, 'x', $3, 0)")
         .bind(&id)
         .bind(username)
         .bind(role)

@@ -11,7 +11,6 @@ use axum::{
 use jsonwebtoken::{EncodingKey, Header};
 use serde_json::{Value, json};
 use tower::ServiceExt;
-use uuid::Uuid;
 
 use virt::domain::Domain;
 
@@ -653,12 +652,9 @@ async fn the_first_start_creates_an_administrator_only_when_there_is_none() {
     assert_eq!(before, after);
 
     let empty = Arc::new(
-        AppState::new(&format!(
-            "sqlite:file:{}?mode=memory&cache=shared",
-            Uuid::new_v4().simple()
-        ))
-        .await
-        .unwrap(),
+        AppState::new(&crate::http_tests::fresh_database().await)
+            .await
+            .unwrap(),
     );
     users::bootstrap_admin(&empty).await.unwrap();
     let role: String = sqlx::query_scalar("SELECT role FROM users")
@@ -1385,7 +1381,7 @@ async fn console_tokens_are_random_short_lived_and_written_for_websockify() {
     let app = TestApp::new().await;
     let a = crate::auth::random_token();
     let b = crate::auth::random_token();
-    sqlx::query("INSERT INTO vnc_tokens (token, target, expires_at) VALUES (?, 'host:5900', ?), (?, 'host:5901', 1)")
+    sqlx::query("INSERT INTO vnc_tokens (token, target, expires_at) VALUES ($1, 'host:5900', $2), ($3, 'host:5901', 1)")
         .bind(&a).bind(now() + 60).bind(&b)
         .execute(&app.state.db).await.unwrap();
 

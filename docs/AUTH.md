@@ -129,7 +129,7 @@ Les mots de passe et jetons n'y figurent jamais. Filtres : `user_id`, `action`, 
 | `REFRESH_TOKEN_TTL_SECONDS` | Durée du refresh token | `604800` |
 | `VNC_TOKEN_TTL_SECONDS` | Durée d'un jeton noVNC | `120` |
 | `CORS_ALLOWED_ORIGINS` | Origines autorisées à appeler l'API depuis un navigateur, séparées par des virgules | aucune |
-| `DATABASE_URL` | Base SQLite | `sqlite://api.db?mode=rwc` |
+| `DATABASE_URL` | Base PostgreSQL (obligatoire) | aucun (`postgres://…@db:5432/hypervisor` dans Docker) |
 | `VM_CONFIG_PATH` | Fichier de jetons de websockify | `vm.cfg` (`/vnc/vm.cfg` dans Docker) |
 
 ## Brancher le front Angular (`hypervisor-ui`)

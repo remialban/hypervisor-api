@@ -30,8 +30,9 @@ services:
     ports:
       - "127.0.0.1:${API_LOCAL_PORT:-3000}:3000"
     environment:
-      # Base SQLite : comptes, droits, propriétaires de VM, audit (volume ./data).
-      DATABASE_URL: sqlite:///data/api.db?mode=rwc
+      # Base PostgreSQL (service db) : comptes, droits, groupes, templates, propriétaires de VM,
+      # audit. Le mot de passe est mis dans une URL : lettres et chiffres seulement.
+      DATABASE_URL: postgres://${POSTGRES_USER:-hypervisor}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD doit être défini (voir .env.example)}@db:5432/${POSTGRES_DB:-hypervisor}
       # Fichier de jetons noVNC, dans le volume partagé avec le conteneur noVNC (et lui seul).
       VM_CONFIG_PATH: /vnc/vm.cfg
       # URL de noVNC vue par le navigateur : l'adresse HTTPS de novnc-haproxy.
@@ -49,8 +50,6 @@ services:
       # séparées par des virgules. Vide = même origine uniquement (front derrière un proxy).
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-}
     volumes:
-      # Persistance de la base de données
-      - ./data:/data
       # Jetons noVNC (volume nommé, partagé avec le conteneur noVNC : il ne contient rien d'autre)
       - vnc-tokens:/vnc
       # Accès au socket libvirt de l'hôte (hyperviseurs locaux)
@@ -76,8 +75,33 @@ services:
         read_only: true
         bind:
           create_host_path: false
+    depends_on:
+      db:
+        condition: service_healthy
     networks:
       - hypervisor-net
+      # Seule l'API joint la base.
+      - db-net
+
+  # Base PostgreSQL de l'API. Aucun port publié, et sur un réseau à part : seule l'API la
+  # joint. Les données sont dans le volume db-data (docker compose down ne l'efface pas).
+  db:
+    image: postgres:17-alpine
+    container_name: hypervisor-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-hypervisor}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD doit être défini (voir .env.example)}
+      POSTGRES_DB: ${POSTGRES_DB:-hypervisor}
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    networks:
+      - db-net
 
   novnc:
     image: ${DOCKERHUB_USERNAME:-remi}/hypervisor-novnc:${TAG:-latest}
@@ -151,7 +175,11 @@ services:
 
 volumes:
   vnc-tokens:
+  db-data:
 
 networks:
   hypervisor-net:
     driver: bridge
+  # Réseau de la base : interne, sans accès à l'extérieur.
+  db-net:
+    internal: true

@@ -66,7 +66,7 @@ pub struct VolumeRef {
     pub volume: String,
 }
 
-// Not stored in SQLite: built from libvirt, so no FromRow.
+// Not stored in the database: built from libvirt, so no FromRow.
 #[derive(Deserialize, ToSchema)]
 pub struct CloneVm {
     pub name: String,

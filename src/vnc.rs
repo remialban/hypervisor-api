@@ -63,7 +63,7 @@ pub async fn connect(
     let token = auth::random_token();
     let expires_at = now() + state.config.vnc_ttl;
     let target = format!("{hypervisor_host}:{vnc_port}");
-    sqlx::query("INSERT INTO vnc_tokens (token, target, expires_at) VALUES (?, ?, ?)")
+    sqlx::query("INSERT INTO vnc_tokens (token, target, expires_at) VALUES ($1, $2, $3)")
         .bind(&token)
         .bind(&target)
         .bind(expires_at)
@@ -134,7 +134,7 @@ fn read_display(uri: &str, vm_id: &str) -> Result<(String, String), ApiError> {
 pub async fn sync_token_file(state: &SharedState) -> Result<(), std::io::Error> {
     let _guard = state.vnc_file_lock.lock().await;
     let tokens: Vec<(String, String)> = sqlx::query_as(
-        "SELECT token, target FROM vnc_tokens WHERE expires_at > ? ORDER BY expires_at",
+        "SELECT token, target FROM vnc_tokens WHERE expires_at > $1 ORDER BY expires_at",
     )
     .bind(now())
     .fetch_all(&state.db)
@@ -170,7 +170,7 @@ pub fn spawn_cleanup(state: SharedState) {
     tokio::spawn(async move {
         loop {
             tokio::time::sleep(CLEANUP_INTERVAL).await;
-            let removed = sqlx::query("DELETE FROM vnc_tokens WHERE expires_at <= ?")
+            let removed = sqlx::query("DELETE FROM vnc_tokens WHERE expires_at <= $1")
                 .bind(now())
                 .execute(&state.db)
                 .await

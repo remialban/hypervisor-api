@@ -9,7 +9,8 @@ Pour les commandes d'installation pas à pas, voir [INSTALLATION.md](../INSTALLA
 ## En bref
 
 - **Deux projets Docker Compose**, lancés chacun depuis son dépôt :
-  - `hypervisor-api` : `api`, `novnc`, et un HAProxy pour chacun des deux ;
+  - `hypervisor-api` : `api`, sa base PostgreSQL (`db`), `novnc`, et un HAProxy pour l'API
+    et pour noVNC ;
   - `hypervisor-ui` : `ui` (nginx, qui sert l'application et relaie `/api`) et son HAProxy.
 - **Trois portes d'entrée HTTPS**, une par HAProxy, chacune sur ses ports :
 
@@ -52,9 +53,12 @@ flowchart TB
                 novnchap["<b>hypervisor-novnc-haproxy</b><br/>haproxy:3.0-alpine<br/>:8080 redirige · :8443 TLS"]
                 novnc["<b>hypervisor-novnc</b><br/>noVNC + websockify<br/>:6080"]
             end
+            subgraph dbnet["🔒 Réseau db-net (interne)"]
+                db["<b>hypervisor-db</b><br/>postgres:17-alpine<br/>:5432"]
+            end
             subgraph vols["Volumes et fichiers montés"]
                 direction LR
-                db[("💾 ./data<br/>api.db")]
+                dbdata[("💾 db-data<br/>données PostgreSQL")]
                 tokens[("🎟️ vnc-tokens<br/>vm.cfg")]
                 secrets[("🔑 clé SSH<br/>known_hosts")]
             end
@@ -74,7 +78,8 @@ flowchart TB
     ui -- "/api · /ping · /swagger-ui · /api-docs<br/>HTTPS :9443 (réseau de l'API)" --> apihap
     apihap -- "tout" --> api
     novnchap -- "/vnc.html · /websockify<br/>WebSocket" --> novnc
-    api --- db
+    api -- "SQL (db-net)" --> db
+    db --- dbdata
     api -- "écrit les jetons" --> tokens
     novnc -- "lit (ro)" --> tokens
     api --- secrets
@@ -88,7 +93,8 @@ flowchart TB
     classDef user fill:#111827,stroke:#9ca3af,color:#ffffff
     class uihap,apihap,novnchap proxy
     class ui,api,novnc app
-    class db,tokens,secrets store
+    class dbdata,tokens,secrets store
+    class db app
     class libvirtd,vncports ext
     class browser user
 ```
@@ -107,6 +113,7 @@ front) et celui de l'API (pour joindre `api-haproxy:9443`). Il ne parle jamais a
 | `hypervisor-api` | api | `remi/hypervisor-api` (`Dockerfile`) | 3000 | `127.0.0.1:3000` seulement | `hypervisor-api_hypervisor-net` |
 | `hypervisor-novnc-haproxy` | api | `haproxy:3.0-alpine` | 8080, 8443 | `6081` → 8080, `6443` → 8443 | `hypervisor-api_hypervisor-net` |
 | `hypervisor-novnc` | api | `remi/hypervisor-novnc` (`Dockerfile.novnc`) | 6080 | non | `hypervisor-api_hypervisor-net` |
+| `hypervisor-db` | api | `postgres:17-alpine` | 5432 | non | `hypervisor-api_db-net` (seulement) |
 | `hypervisor-ui-mock` *(option)* | ui | `hypervisor-ui-mock` (étape `mock`) | 3000 | non | `default` du projet ui |
 
 Les trois HAProxy écoutent sur 8080 et 8443 **dans** leur conteneur. C'est Compose qui les
@@ -134,7 +141,8 @@ pour ouvrir un port inférieur à 1024.
     `/api/auth/…` (20 requêtes / 10 s) compte donc par navigateur, et non pour tout le
     front d'un bloc.
 - **`hypervisor-api`**. Il :
-  - garde les comptes, droits, groupes, templates et le journal dans `./data/api.db` ;
+  - garde les comptes, droits, groupes, templates et le journal dans la base PostgreSQL
+    (`db:5432`) ; il crée ses tables au démarrage ;
   - pilote les hyperviseurs avec libvirt : en `qemu+ssh` avec la clé SSH montée, ou par
     le socket local `/var/run/libvirt/libvirt-sock` ;
   - écrit les jetons de console dans le volume `vnc-tokens`.
@@ -145,6 +153,10 @@ pour ouvrir un port inférieur à 1024.
 - **`hypervisor-novnc`**. websockify sert les pages de noVNC et convertit le WebSocket du
   navigateur en connexion VNC vers l'hyperviseur. Il lit le volume `vnc-tokens` en lecture
   seule : il ne voit ni la base ni les comptes.
+- **`hypervisor-db`**. PostgreSQL 17, la base de l'API. Ses données sont dans le volume
+  `db-data`. Il n'a aucun port publié, et il est seul avec l'API sur le réseau interne
+  `db-net` : ni les HAProxy, ni le front, ni noVNC ne peuvent le joindre. L'API attend qu'il
+  soit prêt (`pg_isready`) avant de démarrer.
 - **`hypervisor-ui-mock`** *(seulement avec `docker-compose.mock.yml`)*. C'est une fausse API
   en Node, pour développer le front sans hyperviseur : nginx l'appelle à la place de la
   vraie (`API_UPSTREAM=http://mock:3000`).
@@ -154,6 +166,7 @@ pour ouvrir un port inférieur à 1024.
 | Réseau | Créé par | Qui s'y branche | À quoi il sert |
 |---|---|---|---|
 | `hypervisor-api_hypervisor-net` | projet api (`hypervisor-net`) | les 4 conteneurs de l'API, et `hypervisor-ui` | HAProxy → API / noVNC, et front → API |
+| `hypervisor-api_db-net` | projet api (`db-net`, `internal`) | `hypervisor-api`, `hypervisor-db` | API → PostgreSQL ; sans accès à l'extérieur |
 | `hypervisor-ui_edge` | projet ui (`edge`) | `hypervisor-ui-haproxy`, `hypervisor-ui` | HAProxy du front → nginx |
 | `hypervisor-ui_default` *(option mock)* | projet ui | `hypervisor-ui`, `hypervisor-ui-mock` | nginx → fausse API |
 
@@ -174,7 +187,7 @@ Ce qu'il faut retenir :
 
 | Source sur la machine | Monté dans | En | Contenu |
 |---|---|---|---|
-| `./data` (api) | `api:/data` | lecture-écriture | `api.db` : comptes, groupes, droits, propriétaires de VM, templates, audit |
+| volume `hypervisor-api_db-data` | `db:/var/lib/postgresql/data` | lecture-écriture | la base PostgreSQL : comptes, groupes, droits, propriétaires de VM, templates, audit. **`docker compose down -v` l'efface.** |
 | volume `hypervisor-api_vnc-tokens` | `api:/vnc` et `novnc:/vnc` | rw pour l'API, **ro** pour noVNC | `vm.cfg` : `jeton: hôte:port` des consoles ouvertes |
 | `SSH_PRIVATE_KEY_HOST_PATH` | `api:/root/.ssh/id_ed25519` | ro | clé SSH vers les hyperviseurs |
 | `~/.ssh/known_hosts` | `api:/root/.ssh/known_hosts` | ro | empreintes des hyperviseurs |

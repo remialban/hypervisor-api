@@ -31,9 +31,9 @@ Les erreurs ont toujours la forme `{"status":"error","content":"..."}`.
 
 ## Stockage
 
-SQLite (`api.db`, schéma dans `migrations/`) stocke les hyperviseurs, les comptes, les sessions, les droits d'accès aux hyperviseurs, le propriétaire de chaque VM (par UUID libvirt), les prêts de VM, les jetons noVNC et le journal d'audit.
+PostgreSQL (schéma dans `migrations/`) stocke les hyperviseurs, les comptes, les sessions, les droits d'accès aux hyperviseurs, le propriétaire de chaque VM (par UUID libvirt), les prêts de VM, les jetons noVNC et le journal d'audit.
 
-Les VM, disques et réseaux eux-mêmes ne sont pas stockes dans SQLite : libvirt reste leur source de vérité.
+Les VM, disques et réseaux eux-mêmes ne sont pas stockés dans la base : libvirt reste leur source de vérité.
 
 ## Sante
 
@@ -59,7 +59,7 @@ Admin. Liste, donne ou retire le droit de **créer des VM** sur cet hyperviseur.
 
 ### `POST /api/hypervisors`
 
-Ajoute un hyperviseur dans SQLite apres verification de sa connexion libvirt.
+Ajoute un hyperviseur dans la base après verification de sa connexion libvirt.
 
 ```json
 {
@@ -76,7 +76,7 @@ Retourne un hyperviseur et son statut courant.
 
 ### `PATCH /api/hypervisors/{id}`
 
-Modifie le nom ou l'URI, puis met a jour SQLite.
+Modifie le nom ou l'URI, puis met à jour la base.
 
 ```json
 {"name":"kvm-production"}
@@ -90,7 +90,7 @@ Reponses : `200`, `404`, `502`.
 
 ### `DELETE /api/hypervisors/{id}`
 
-Supprime uniquement l'enregistrement de SQLite. Cette route ne supprime pas l'hote KVM.
+Supprime uniquement l'enregistrement de la base. Cette route ne supprime pas l'hote KVM.
 
 Reponses : `204` ou `404`.
 
@@ -104,7 +104,7 @@ Un utilisateur ne voit que ses VM et celles qu'on lui prête ; un admin voit tou
 - `DELETE /api/hypervisors/{h}/vms/{vm}/shares/{user_id}` : retire un prêt (propriétaire, admin, ou l'emprunteur lui-même).
 - `PUT /api/hypervisors/{h}/vms/{vm}/owner` : `{"owner_id"}`, admin. Donne une VM à un utilisateur, y compris une VM créée hors de l'API.
 
-Les routes VM ne stockent rien dans SQLite. `GET .../vms` et `GET .../vms/{vm_id}` lisent libvirt (`vm_id` = UUID libvirt, erreurs 400, 404 et 502). `POST .../start` et `POST .../stop` agissent sur libvirt et renvoient la VM (200) ou 409 si l'etat ne le permet pas. `stop` envoie un arret ACPI asynchrone (l'etat renvoye peut encore etre `running`) ; `?force=true` coupe immediatement l'alimentation. `POST .../clone` (corps `{"name": "..."}`) est asynchrone : il repond `202` avec un job (`Location: /api/jobs/{id}`). La VM source doit etre arretee ; ses disques sont copies dans leur pool de stockage et la copie est une VM arretee avec un nouvel UUID et une nouvelle MAC. `GET /api/jobs/{job_id}` donne le statut (`running`, `succeeded` avec `result`, `failed` avec `error`) ; les jobs sont en memoire et perdus au redemarrage. `DELETE .../vms/{vm_id}` supprime une VM arretee (204 ; 409 si elle tourne) en conservant ses fichiers disque ; `?delete_disks=true` supprime aussi les volumes, sauf s'ils sont partages avec une autre VM ou hors pool (409, rien n'est supprime). `GET .../vm-options` donne ce qu'une interface peut proposer pour creer une VM : pools de stockage actifs avec leurs volumes (`kind` = `disk` ou `iso`, `used_by` = VM qui utilisent deja le disque), reseaux actifs, firmwares, bornes (`limits`) et valeurs par defaut (`defaults`), lus en direct dans libvirt. Seuls les fichiers reconnus comme image de disque (qcow2, vmdk..., ou `.img`/`.raw`) ou comme ISO sont listes : archives, scripts et autres fichiers d'un pool sont ignores. `POST .../vms` cree une VM (201, arretee sauf `"start": true`) a partir de ce que propose `vm-options` : voir ci-dessous.
+Les routes VM ne stockent rien dans la base (hors propriétaires et prêts). `GET .../vms` et `GET .../vms/{vm_id}` lisent libvirt (`vm_id` = UUID libvirt, erreurs 400, 404 et 502). `POST .../start` et `POST .../stop` agissent sur libvirt et renvoient la VM (200) ou 409 si l'etat ne le permet pas. `stop` envoie un arret ACPI asynchrone (l'etat renvoye peut encore etre `running`) ; `?force=true` coupe immediatement l'alimentation. `POST .../clone` (corps `{"name": "..."}`) est asynchrone : il repond `202` avec un job (`Location: /api/jobs/{id}`). La VM source doit etre arretee ; ses disques sont copies dans leur pool de stockage et la copie est une VM arretee avec un nouvel UUID et une nouvelle MAC. `GET /api/jobs/{job_id}` donne le statut (`running`, `succeeded` avec `result`, `failed` avec `error`) ; les jobs sont en memoire et perdus au redemarrage. `DELETE .../vms/{vm_id}` supprime une VM arretee (204 ; 409 si elle tourne) en conservant ses fichiers disque ; `?delete_disks=true` supprime aussi les volumes, sauf s'ils sont partages avec une autre VM ou hors pool (409, rien n'est supprime). `GET .../vm-options` donne ce qu'une interface peut proposer pour creer une VM : pools de stockage actifs avec leurs volumes (`kind` = `disk` ou `iso`, `used_by` = VM qui utilisent deja le disque), reseaux actifs, firmwares, bornes (`limits`) et valeurs par defaut (`defaults`), lus en direct dans libvirt. Seuls les fichiers reconnus comme image de disque (qcow2, vmdk..., ou `.img`/`.raw`) ou comme ISO sont listes : archives, scripts et autres fichiers d'un pool sont ignores. `POST .../vms` cree une VM (201, arretee sauf `"start": true`) a partir de ce que propose `vm-options` : voir ci-dessous.
 
 ```text
 GET    /api/hypervisors/{hypervisor_id}/vms
@@ -148,7 +148,7 @@ Corps de la creation (`POST /api/hypervisors/{hypervisor_id}/vms`) :
 
 Les routes disques, pools et réseaux sont réservées aux admins (`403` sinon).
 
-Les disques et les pools sont geres directement par libvirt, sans stockage dans SQLite.
+Les disques et les pools sont geres directement par libvirt, sans stockage dans la base.
 
 ```text
 GET    /api/hypervisors/{hypervisor_id}/disks
@@ -196,7 +196,7 @@ La reponse de pool contient son UUID `id`, son `hypervisor_id`, son `name` et so
 
 ## Reseaux
 
-Les réseaux sont lus et créés directement dans libvirt, sans stockage SQLite. La liste renvoie les réseaux actifs ou inactifs de l’hyperviseur. La création définit puis démarre un réseau isolé ; le champ `bridge` est facultatif.
+Les réseaux sont lus et créés directement dans libvirt, sans stockage dans la base. La liste renvoie les réseaux actifs ou inactifs de l’hyperviseur. La création définit puis démarre un réseau isolé ; le champ `bridge` est facultatif.
 
 ```text
 GET  /api/hypervisors/{hypervisor_id}/networks

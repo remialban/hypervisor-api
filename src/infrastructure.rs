@@ -1,9 +1,20 @@
-use axum::{extract::{Path,State}, http::StatusCode, Json};
+use axum::{
+    Json,
+    extract::{Path, State},
+    http::StatusCode,
+};
 use std::path::Path as FilePath;
 use xmltree::{Element, XMLNode};
 
-use crate::{auth::AuthUser, common::error_response, models::{Disk, DiskRequest, DiskUpdateRequest, Message, Network, NetworkRequest, StoragePool, StoragePoolRequest},
-state::SharedState};
+use crate::{
+    auth::AuthUser,
+    common::error_response,
+    models::{
+        Disk, DiskRequest, DiskUpdateRequest, Message, Network, NetworkRequest, StoragePool,
+        StoragePoolRequest,
+    },
+    state::SharedState,
+};
 
 type ApiError = (StatusCode, Json<Message>);
 
@@ -11,7 +22,7 @@ const DEFAULT_STORAGE_POOL: &str = "default-pool";
 
 //mod hypervisors;
 async fn get_hypervisor_uri(state: &SharedState, hypervisor_id: &str) -> Result<String, ApiError> {
-    sqlx::query_as::<_, (String,)>("SELECT uri FROM hypervisors WHERE id = ?")
+    sqlx::query_as::<_, (String,)>("SELECT uri FROM hypervisors WHERE id = $1")
         .bind(hypervisor_id)
         .fetch_optional(&state.db)
         .await
@@ -47,15 +58,13 @@ pub async fn list_pools(
 ) -> Result<Json<Vec<StoragePool>>, ApiError> {
     user.require_admin()?;
     let uri = get_hypervisor_uri(&state, &hypervisor_id).await?;
-    let pools = tokio::task::spawn_blocking(move || {
-        list_pools_from_libvirt(&uri, &hypervisor_id)
-    })
-    .await
-    .map_err(|_| error_response(StatusCode::INTERNAL_SERVER_ERROR, "Tâche bloquée en échec"))?
-    .map_err(|error| {
-        eprintln!("list_pools libvirt error: {error}");
-        error_response(StatusCode::BAD_GATEWAY, "Erreur libvirt")
-    })?;
+    let pools = tokio::task::spawn_blocking(move || list_pools_from_libvirt(&uri, &hypervisor_id))
+        .await
+        .map_err(|_| error_response(StatusCode::INTERNAL_SERVER_ERROR, "Tâche bloquée en échec"))?
+        .map_err(|error| {
+            eprintln!("list_pools libvirt error: {error}");
+            error_response(StatusCode::BAD_GATEWAY, "Erreur libvirt")
+        })?;
 
     Ok(Json(pools))
 }
@@ -71,20 +80,29 @@ pub async fn create_pools(
     let valid_name = !body.name.is_empty()
         && body.name.len() <= 64
         && !body.name.starts_with('.')
-        && body.name.chars().all(|character| {
-            character.is_ascii_alphanumeric() || "-_..".contains(character)
-        });
+        && body
+            .name
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || "-_..".contains(character));
     if !valid_name {
-        return Err(error_response(StatusCode::BAD_REQUEST, "Nom de pool invalide"));
+        return Err(error_response(
+            StatusCode::BAD_REQUEST,
+            "Nom de pool invalide",
+        ));
     }
     if !FilePath::new(&body.target_path).is_absolute()
         || body.target_path.chars().any(char::is_control)
     {
-        return Err(error_response(StatusCode::BAD_REQUEST, "Le chemin cible doit être absolu et valide"));
+        return Err(error_response(
+            StatusCode::BAD_REQUEST,
+            "Le chemin cible doit être absolu et valide",
+        ));
     }
 
     let mut xml_root = Element::new("pool");
-    xml_root.attributes.insert("type".to_owned(), "dir".to_owned());
+    xml_root
+        .attributes
+        .insert("type".to_owned(), "dir".to_owned());
     let mut name = Element::new("name");
     name.children.push(XMLNode::Text(body.name.clone()));
     let mut target = Element::new("target");
@@ -95,11 +113,13 @@ pub async fn create_pools(
     xml_root.children.push(XMLNode::Element(target));
     let mut xml_bytes = Vec::new();
     xml_root.write(&mut xml_bytes).map_err(|_| {
-        error_response(StatusCode::INTERNAL_SERVER_ERROR, "Erreur génération XML du pool")
+        error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Erreur génération XML du pool",
+        )
     })?;
-    let xml = String::from_utf8(xml_bytes).map_err(|_| {
-        error_response(StatusCode::INTERNAL_SERVER_ERROR, "XML du pool invalide")
-    })?;
+    let xml = String::from_utf8(xml_bytes)
+        .map_err(|_| error_response(StatusCode::INTERNAL_SERVER_ERROR, "XML du pool invalide"))?;
     let uri = get_hypervisor_uri(&state, &hypervisor_id).await?;
 
     let pool = tokio::task::spawn_blocking(move || {
@@ -116,7 +136,12 @@ pub async fn create_pools(
         })
     })
     .await
-    .map_err(|_| error_response(StatusCode::INTERNAL_SERVER_ERROR, "Tâche de création en échec"))?
+    .map_err(|_| {
+        error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Tâche de création en échec",
+        )
+    })?
     .map_err(|error| {
         eprintln!("create_pools libvirt error: {error}");
         error_response(StatusCode::BAD_GATEWAY, "Erreur libvirt")
@@ -158,9 +183,7 @@ pub async fn list_disks(
 ) -> Result<Json<Vec<Disk>>, ApiError> {
     user.require_admin()?;
     let uri = get_hypervisor_uri(&state, &hypervisor_id).await?;
-    let disks = tokio::task::spawn_blocking(move || {
-        list_disks_from_libvirt(&uri, &hypervisor_id)
-    })
+    let disks = tokio::task::spawn_blocking(move || list_disks_from_libvirt(&uri, &hypervisor_id))
         .await
         .map_err(|_| error_response(StatusCode::INTERNAL_SERVER_ERROR, "Tâche bloquée en échec"))?
         .map_err(|_| error_response(StatusCode::BAD_GATEWAY, "Erreur libvirt"))?;
@@ -177,17 +200,26 @@ pub async fn create_disk(
 ) -> Result<(StatusCode, Json<Disk>), ApiError> {
     user.require_admin()?;
     if body.name.is_empty()
-        || !body.name.chars().all(|character| {
-            character.is_ascii_alphanumeric() || "-_.".contains(character)
-        })
+        || !body
+            .name
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || "-_.".contains(character))
     {
-        return Err(error_response(StatusCode::BAD_REQUEST, "Nom de disque invalide"));
+        return Err(error_response(
+            StatusCode::BAD_REQUEST,
+            "Nom de disque invalide",
+        ));
     }
     if !matches!(body.format.as_str(), "qcow2" | "raw") {
-        return Err(error_response(StatusCode::BAD_REQUEST, "Format attendu: qcow2 ou raw"));
+        return Err(error_response(
+            StatusCode::BAD_REQUEST,
+            "Format attendu: qcow2 ou raw",
+        ));
     }
 
-    let size_bytes = body.size_gb.checked_mul(1_073_741_824)
+    let size_bytes = body
+        .size_gb
+        .checked_mul(1_073_741_824)
         .ok_or_else(|| error_response(StatusCode::BAD_REQUEST, "Taille de disque invalide"))?;
     let size_gb = i64::try_from(body.size_gb)
         .map_err(|_| error_response(StatusCode::BAD_REQUEST, "Taille de disque invalide"))?;
@@ -290,15 +322,16 @@ pub async fn get_disk(
 ) -> Result<Json<Disk>, ApiError> {
     user.require_admin()?;
     let uri = get_hypervisor_uri(&state, &hypervisor_id).await?;
-    let disk = tokio::task::spawn_blocking(move || {
-        get_disk_from_libvirt(&uri, &hypervisor_id, &disk_id)
-    })
-    .await
-    .map_err(|_| error_response(StatusCode::INTERNAL_SERVER_ERROR, "Tâche bloquée en échec"))?
-    .map_err(|error| {
-        eprintln!("get_disk libvirt error: {error}");
-        error_response(StatusCode::BAD_GATEWAY, "Erreur libvirt")
-    })?;
+    let disk =
+        tokio::task::spawn_blocking(move || get_disk_from_libvirt(&uri, &hypervisor_id, &disk_id))
+            .await
+            .map_err(|_| {
+                error_response(StatusCode::INTERNAL_SERVER_ERROR, "Tâche bloquée en échec")
+            })?
+            .map_err(|error| {
+                eprintln!("get_disk libvirt error: {error}");
+                error_response(StatusCode::BAD_GATEWAY, "Erreur libvirt")
+            })?;
     let disk = disk.ok_or_else(|| error_response(StatusCode::NOT_FOUND, "Disque non trouvé"))?;
 
     Ok(Json(disk))
@@ -313,7 +346,10 @@ pub async fn update_disk(
 ) -> Result<Json<Disk>, ApiError> {
     user.require_admin()?;
     if body.size_gb == 0 {
-        return Err(error_response(StatusCode::BAD_REQUEST, "Taille de disque invalide"));
+        return Err(error_response(
+            StatusCode::BAD_REQUEST,
+            "Taille de disque invalide",
+        ));
     }
     let size_bytes = body
         .size_gb
@@ -327,29 +363,28 @@ pub async fn update_disk(
     .await
     .map_err(|_| error_response(StatusCode::INTERNAL_SERVER_ERROR, "Tâche bloquée en échec"))?
     .map_err(|error| match error {
-        DiskResizeError::ShrinkNotAllowed => {
-            error_response(StatusCode::BAD_REQUEST, "La réduction de taille est interdite")
-        }
-        DiskResizeError::Libvirt(error) => {
-            match error.code() {
-                virt::error::ErrorNumber::NoStorageVolume => {
-                    error_response(StatusCode::NOT_FOUND, "Disque non trouvé")
-                }
-                virt::error::ErrorNumber::NoSupport
-                | virt::error::ErrorNumber::ArgumentUnsupported
-                | virt::error::ErrorNumber::OperationUnsupported => {
-                    eprintln!("update_disk resize unsupported: {error}");
-                    error_response(
-                        StatusCode::NOT_IMPLEMENTED,
-                        "Le pilote libvirt ne prend pas en charge le redimensionnement des volumes",
-                    )
-                }
-                _ => {
-                    eprintln!("update_disk libvirt error: {error}");
-                    error_response(StatusCode::BAD_GATEWAY, "Erreur libvirt")
-                }
+        DiskResizeError::ShrinkNotAllowed => error_response(
+            StatusCode::BAD_REQUEST,
+            "La réduction de taille est interdite",
+        ),
+        DiskResizeError::Libvirt(error) => match error.code() {
+            virt::error::ErrorNumber::NoStorageVolume => {
+                error_response(StatusCode::NOT_FOUND, "Disque non trouvé")
             }
-        }
+            virt::error::ErrorNumber::NoSupport
+            | virt::error::ErrorNumber::ArgumentUnsupported
+            | virt::error::ErrorNumber::OperationUnsupported => {
+                eprintln!("update_disk resize unsupported: {error}");
+                error_response(
+                    StatusCode::NOT_IMPLEMENTED,
+                    "Le pilote libvirt ne prend pas en charge le redimensionnement des volumes",
+                )
+            }
+            _ => {
+                eprintln!("update_disk libvirt error: {error}");
+                error_response(StatusCode::BAD_GATEWAY, "Erreur libvirt")
+            }
+        },
     })?;
 
     Ok(Json(disk))
@@ -435,15 +470,16 @@ pub async fn list_networks(
 ) -> Result<Json<Vec<Network>>, ApiError> {
     user.require_admin()?;
     let uri = get_hypervisor_uri(&state, &hypervisor_id).await?;
-    let networks = tokio::task::spawn_blocking(move || {
-        list_networks_from_libvirt(&uri, &hypervisor_id)
-    })
-    .await
-    .map_err(|_| error_response(StatusCode::INTERNAL_SERVER_ERROR, "Tâche bloquée en échec"))?
-    .map_err(|error| {
-        eprintln!("list_networks libvirt error: {error}");
-        error_response(StatusCode::BAD_GATEWAY, "Erreur libvirt")
-    })?;
+    let networks =
+        tokio::task::spawn_blocking(move || list_networks_from_libvirt(&uri, &hypervisor_id))
+            .await
+            .map_err(|_| {
+                error_response(StatusCode::INTERNAL_SERVER_ERROR, "Tâche bloquée en échec")
+            })?
+            .map_err(|error| {
+                eprintln!("list_networks libvirt error: {error}");
+                error_response(StatusCode::BAD_GATEWAY, "Erreur libvirt")
+            })?;
 
     Ok(Json(networks))
 }
@@ -459,20 +495,27 @@ pub async fn create_network(
     let valid_name = !body.name.is_empty()
         && body.name.len() <= 64
         && !body.name.starts_with('.')
-        && body.name.chars().all(|character| {
-            character.is_ascii_alphanumeric() || "-_.".contains(character)
-        });
+        && body
+            .name
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || "-_.".contains(character));
     if !valid_name {
-        return Err(error_response(StatusCode::BAD_REQUEST, "Nom de réseau invalide"));
+        return Err(error_response(
+            StatusCode::BAD_REQUEST,
+            "Nom de réseau invalide",
+        ));
     }
     if body.bridge.as_ref().is_some_and(|bridge| {
         bridge.is_empty()
             || bridge.len() > 15
-            || !bridge.chars().all(|character| {
-                character.is_ascii_alphanumeric() || "-_.".contains(character)
-            })
+            || !bridge
+                .chars()
+                .all(|character| character.is_ascii_alphanumeric() || "-_.".contains(character))
     }) {
-        return Err(error_response(StatusCode::BAD_REQUEST, "Nom de bridge invalide"));
+        return Err(error_response(
+            StatusCode::BAD_REQUEST,
+            "Nom de bridge invalide",
+        ));
     }
 
     let mut xml_root = Element::new("network");
@@ -487,11 +530,13 @@ pub async fn create_network(
 
     let mut xml_bytes = Vec::new();
     xml_root.write(&mut xml_bytes).map_err(|_| {
-        error_response(StatusCode::INTERNAL_SERVER_ERROR, "Erreur génération XML du réseau")
+        error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Erreur génération XML du réseau",
+        )
     })?;
-    let xml = String::from_utf8(xml_bytes).map_err(|_| {
-        error_response(StatusCode::INTERNAL_SERVER_ERROR, "XML du réseau invalide")
-    })?;
+    let xml = String::from_utf8(xml_bytes)
+        .map_err(|_| error_response(StatusCode::INTERNAL_SERVER_ERROR, "XML du réseau invalide"))?;
     let uri = get_hypervisor_uri(&state, &hypervisor_id).await?;
 
     let network = tokio::task::spawn_blocking(move || {
@@ -512,7 +557,12 @@ pub async fn create_network(
         })
     })
     .await
-    .map_err(|_| error_response(StatusCode::INTERNAL_SERVER_ERROR, "Tâche de création en échec"))?
+    .map_err(|_| {
+        error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Tâche de création en échec",
+        )
+    })?
     .map_err(|error| match error.code() {
         virt::error::ErrorNumber::NetworkExist => {
             error_response(StatusCode::CONFLICT, "Un réseau portant ce nom existe déjà")
@@ -534,4 +584,3 @@ pub async fn create_network(
 
     Ok((StatusCode::CREATED, Json(network)))
 }
-

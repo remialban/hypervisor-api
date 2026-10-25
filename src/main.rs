@@ -1,13 +1,13 @@
 mod access;
 mod audit;
 mod auth;
+#[cfg(test)]
+mod auth_tests;
 mod common;
 mod config;
 mod docs;
 mod errors;
 mod groups;
-#[cfg(test)]
-mod auth_tests;
 #[cfg(test)]
 mod http_tests;
 mod hypervisors;
@@ -44,15 +44,24 @@ async fn main() {
     let database_url = std::env::var("DATABASE_URL")
         .ok()
         .filter(|url| !url.is_empty())
-        .unwrap_or_else(|| "sqlite://api.db?mode=rwc".to_owned());
+        .unwrap_or_else(|| {
+            eprintln!(
+                "DATABASE_URL is missing: the PostgreSQL database, for example \
+                 postgres://hypervisor:password@localhost:5432/hypervisor"
+            );
+            std::process::exit(1);
+        });
 
     let state = Arc::new(
         AppState::with_config(&database_url, config)
             .await
-            .expect("Could not initialize the SQLite database"),
+            .expect("Could not initialize the PostgreSQL database"),
     );
     if let Err(error) = users::bootstrap_admin(&state).await {
-        eprintln!("Could not create the first administrator: {}", error.message());
+        eprintln!(
+            "Could not create the first administrator: {}",
+            error.message()
+        );
         std::process::exit(1);
     }
     // Starts from the valid tokens only: this also drops the permanent tokens of older versions.

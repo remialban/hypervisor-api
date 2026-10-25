@@ -54,7 +54,7 @@ pub async fn list(
     let shares = sqlx::query_as::<_, ShareView>(
         "SELECT s.user_id, u.username, s.created_at, s.expires_at
          FROM vm_shares s JOIN users u ON u.id = s.user_id
-         WHERE s.hypervisor_id = ? AND s.vm_id = ? AND (s.expires_at IS NULL OR s.expires_at > ?)
+         WHERE s.hypervisor_id = $1 AND s.vm_id = $2 AND (s.expires_at IS NULL OR s.expires_at > $3)
          ORDER BY u.username",
     )
     .bind(&hypervisor_id)
@@ -88,11 +88,12 @@ pub async fn create(
         .ok_or_else(|| {
             ApiError::Conflict("This VM has no owner: give it to a user before sharing it".into())
         })?;
-    let borrower: Option<(String, String)> =
-        sqlx::query_as("SELECT id, username FROM users WHERE username = ? AND disabled = 0")
-            .bind(&body.username)
-            .fetch_optional(&state.db)
-            .await?;
+    let borrower: Option<(String, String)> = sqlx::query_as(
+        "SELECT id, username FROM users WHERE lower(username) = lower($1) AND NOT disabled",
+    )
+    .bind(&body.username)
+    .fetch_optional(&state.db)
+    .await?;
     let (borrower_id, borrower_name) =
         borrower.ok_or_else(|| ApiError::NotFound("User not found".into()))?;
     if borrower_id == owner.0 {
@@ -104,7 +105,7 @@ pub async fn create(
     let created_at = now();
     sqlx::query(
         "INSERT INTO vm_shares (hypervisor_id, vm_id, user_id, created_at, expires_at)
-         VALUES (?, ?, ?, ?, ?)
+         VALUES ($1, $2, $3, $4, $5)
          ON CONFLICT (hypervisor_id, vm_id, user_id) DO UPDATE SET expires_at = excluded.expires_at",
     )
     .bind(&hypervisor_id)
@@ -147,13 +148,14 @@ pub async fn revoke(
         ));
     }
     let vm_id = access::parse_vm_id(&vm_id)?;
-    let result =
-        sqlx::query("DELETE FROM vm_shares WHERE hypervisor_id = ? AND vm_id = ? AND user_id = ?")
-            .bind(&hypervisor_id)
-            .bind(&vm_id)
-            .bind(&borrower_id)
-            .execute(&state.db)
-            .await?;
+    let result = sqlx::query(
+        "DELETE FROM vm_shares WHERE hypervisor_id = $1 AND vm_id = $2 AND user_id = $3",
+    )
+    .bind(&hypervisor_id)
+    .bind(&vm_id)
+    .bind(&borrower_id)
+    .execute(&state.db)
+    .await?;
     if result.rows_affected() == 0 {
         return Err(ApiError::NotFound("Share not found".into()));
     }
@@ -178,7 +180,7 @@ pub async fn change_owner(
     user.require_admin()?;
     let vm_id = access::parse_vm_id(&vm_id)?;
     let new_owner: Option<String> =
-        sqlx::query_scalar("SELECT username FROM users WHERE id = ? AND disabled = 0")
+        sqlx::query_scalar("SELECT username FROM users WHERE id = $1 AND NOT disabled")
             .bind(&body.owner_id)
             .fetch_optional(&state.db)
             .await?;
@@ -197,7 +199,7 @@ pub async fn change_owner(
         Usage::one_vm(vm.vcpus as u64, vm.memory_mb as u64, 0),
     )
     .await?;
-    sqlx::query("DELETE FROM vm_shares WHERE hypervisor_id = ? AND vm_id = ? AND user_id = ?")
+    sqlx::query("DELETE FROM vm_shares WHERE hypervisor_id = $1 AND vm_id = $2 AND user_id = $3")
         .bind(&hypervisor_id)
         .bind(&vm_id)
         .bind(&body.owner_id)

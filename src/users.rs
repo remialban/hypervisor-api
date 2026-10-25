@@ -66,13 +66,13 @@ async fn issue_tokens(state: &SharedState, user_id: &str) -> Result<TokenRespons
     let access_token = auth::issue_access_token(state, user_id)?;
     let refresh_token = random_token();
     let created_at = now();
-    sqlx::query("DELETE FROM refresh_tokens WHERE user_id = ? AND expires_at < ?")
+    sqlx::query("DELETE FROM refresh_tokens WHERE user_id = $1 AND expires_at < $2")
         .bind(user_id)
         .bind(created_at)
         .execute(&state.db)
         .await?;
     sqlx::query(
-        "INSERT INTO refresh_tokens (token_hash, user_id, expires_at, created_at) VALUES (?, ?, ?, ?)",
+        "INSERT INTO refresh_tokens (token_hash, user_id, expires_at, created_at) VALUES ($1, $2, $3, $4)",
     )
     .bind(sha256_hex(&refresh_token))
     .bind(user_id)
@@ -103,7 +103,7 @@ async fn login(
 ) -> Result<TokenResponse, ApiError> {
     auth::check_login_allowed(state, username)?;
     let row = sqlx::query_as::<_, LoginRow>(
-        "SELECT id, username, password_hash, disabled FROM users WHERE username = ?",
+        "SELECT id, username, password_hash, disabled FROM users WHERE lower(username) = lower($1)",
     )
     .bind(username)
     .fetch_optional(&state.db)
@@ -143,7 +143,7 @@ async fn refresh(state: &SharedState, refresh_token: &str) -> Result<TokenRespon
     let hash = sha256_hex(refresh_token);
     // Single use: the token is consumed even if what follows fails.
     let row: Option<(String, i64)> = sqlx::query_as(
-        "DELETE FROM refresh_tokens WHERE token_hash = ? RETURNING user_id, expires_at",
+        "DELETE FROM refresh_tokens WHERE token_hash = $1 RETURNING user_id, expires_at",
     )
     .bind(hash)
     .fetch_optional(&state.db)
@@ -154,7 +154,7 @@ async fn refresh(state: &SharedState, refresh_token: &str) -> Result<TokenRespon
         return Err(invalid());
     }
     let active: Option<i64> =
-        sqlx::query_scalar("SELECT 1 FROM users WHERE id = ? AND disabled = 0")
+        sqlx::query_scalar("SELECT 1::BIGINT FROM users WHERE id = $1 AND NOT disabled")
             .bind(&user_id)
             .fetch_optional(&state.db)
             .await?;
@@ -221,7 +221,7 @@ pub async fn logout(
     Json(body): Json<RefreshRequest>,
 ) -> Result<StatusCode, ApiError> {
     let deleted: Option<String> =
-        sqlx::query_scalar("DELETE FROM refresh_tokens WHERE token_hash = ? RETURNING user_id")
+        sqlx::query_scalar("DELETE FROM refresh_tokens WHERE token_hash = $1 RETURNING user_id")
             .bind(sha256_hex(&body.refresh_token))
             .fetch_optional(&state.db)
             .await?;
@@ -324,7 +324,7 @@ async fn view(state: &SharedState, row: UserRow) -> Result<UserView, ApiError> {
 
 async fn load_user(state: &SharedState, id: &str) -> Result<UserView, ApiError> {
     let row =
-        sqlx::query_as::<_, UserRow>(&format!("SELECT {USER_COLUMNS} FROM users WHERE id = ?"))
+        sqlx::query_as::<_, UserRow>(&format!("SELECT {USER_COLUMNS} FROM users WHERE id = $1"))
             .bind(id)
             .fetch_optional(&state.db)
             .await?
@@ -344,7 +344,7 @@ pub async fn insert_user(
     let id = Uuid::new_v4().to_string();
     let hash = hash_password(password).await?;
     let result = sqlx::query(
-        "INSERT INTO users (id, username, password_hash, role, created_at) VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO users (id, username, password_hash, role, created_at) VALUES ($1, $2, $3, $4, $5)",
     )
     .bind(&id)
     .bind(username)
@@ -412,7 +412,7 @@ pub async fn change_password(
     Json(body): Json<ChangePassword>,
 ) -> Result<StatusCode, ApiError> {
     validate_password(&body.new_password)?;
-    let hash: String = sqlx::query_scalar("SELECT password_hash FROM users WHERE id = ?")
+    let hash: String = sqlx::query_scalar("SELECT password_hash FROM users WHERE id = $1")
         .bind(&user.id)
         .fetch_one(&state.db)
         .await?;
@@ -431,12 +431,12 @@ async fn set_password(
     password: String,
 ) -> Result<(), ApiError> {
     let hash = hash_password(password).await?;
-    sqlx::query("UPDATE users SET password_hash = ? WHERE id = ?")
+    sqlx::query("UPDATE users SET password_hash = $1 WHERE id = $2")
         .bind(hash)
         .bind(user_id)
         .execute(&state.db)
         .await?;
-    sqlx::query("DELETE FROM refresh_tokens WHERE user_id = ?")
+    sqlx::query("DELETE FROM refresh_tokens WHERE user_id = $1")
         .bind(user_id)
         .execute(&state.db)
         .await?;
@@ -505,7 +505,7 @@ pub struct UpdateUser {
 /// The system must always keep an active administrator.
 async fn ensure_another_admin(state: &SharedState, user_id: &str) -> Result<(), ApiError> {
     let others: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM users WHERE role = 'admin' AND disabled = 0 AND id != ?",
+        "SELECT COUNT(*) FROM users WHERE role = 'admin' AND NOT disabled AND id != $1",
     )
     .bind(user_id)
     .fetch_one(&state.db)
@@ -536,7 +536,7 @@ pub async fn update_user(
         ensure_another_admin(&state, &user_id).await?;
     }
     sqlx::query(
-        "UPDATE users SET role = COALESCE(?, role), disabled = COALESCE(?, disabled) WHERE id = ?",
+        "UPDATE users SET role = COALESCE($1, role), disabled = COALESCE($2, disabled) WHERE id = $3",
     )
     .bind(role.map(Role::as_str))
     .bind(body.disabled)
@@ -544,7 +544,7 @@ pub async fn update_user(
     .execute(&state.db)
     .await?;
     if body.disabled == Some(true) {
-        sqlx::query("DELETE FROM refresh_tokens WHERE user_id = ?")
+        sqlx::query("DELETE FROM refresh_tokens WHERE user_id = $1")
             .bind(&user_id)
             .execute(&state.db)
             .await?;
@@ -576,7 +576,7 @@ pub async fn delete_user(
     if target.role == "admin" && !target.disabled {
         ensure_another_admin(&state, &user_id).await?;
     }
-    sqlx::query("DELETE FROM users WHERE id = ?")
+    sqlx::query("DELETE FROM users WHERE id = $1")
         .bind(&user_id)
         .execute(&state.db)
         .await?;
@@ -623,7 +623,7 @@ pub async fn set_quota(
     }
     load_user(&state, &user_id).await?;
     sqlx::query(
-        "UPDATE users SET max_vms = ?, max_vcpus = ?, max_memory_mb = ?, max_disk_gb = ? WHERE id = ?",
+        "UPDATE users SET max_vms = $1, max_vcpus = $2, max_memory_mb = $3, max_disk_gb = $4 WHERE id = $5",
     )
     .bind(body.max_vms)
     .bind(body.max_vcpus)
@@ -663,7 +663,7 @@ pub async fn put_settings(
 ) -> Result<Json<Settings>, ApiError> {
     user.require_admin()?;
     sqlx::query(
-        "INSERT INTO settings (key, value) VALUES ('registration_open', ?)
+        "INSERT INTO settings (key, value) VALUES ('registration_open', $1)
          ON CONFLICT (key) DO UPDATE SET value = excluded.value",
     )
     .bind(if body.registration_open {

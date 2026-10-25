@@ -13,7 +13,7 @@ Les outils utilisés pour développer le projet, côté API (`hypervisor-api`) e
 | **Axum** et **Tokio** | Le serveur web (routes, extracteurs, réponses JSON) et le moteur asynchrone sur lequel il tourne. |
 | **virt** (libvirt) | Parle aux hyperviseurs : lister, créer, démarrer les VM, gérer disques et réseaux. Fonctionne en local ou par SSH (`qemu+ssh://`). |
 | **roxmltree**, **xmltree** | Lisent et écrivent le XML de libvirt (description des VM, disques, réseaux). |
-| **SQLx** et **SQLite** | La base de données : comptes, droits, groupes, templates, audit. Les migrations sont dans `migrations/` et s'appliquent au démarrage. |
+| **SQLx** et **PostgreSQL** | La base de données : comptes, droits, groupes, templates, audit. Le schéma est dans `migrations/` et s'applique tout seul au démarrage. |
 | **utoipa** et **Swagger UI** | Génèrent la documentation OpenAPI à partir du code, et l'interface Swagger (`/swagger-ui/`). |
 | **argon2** | Hache les mots de passe. |
 | **jsonwebtoken** | Crée et vérifie les jetons de connexion (JWT). |
@@ -26,7 +26,7 @@ Les outils utilisés pour développer le projet, côté API (`hypervisor-api`) e
 |---|---|
 | `cargo fmt` | Met le code en forme selon le style standard de Rust. `cargo fmt --check` vérifie sans rien modifier. |
 | `cargo clippy --all-targets --all-features -- -D warnings` | Analyse le code et signale les erreurs courantes et le code à simplifier. Aucun avertissement n'est toléré. |
-| `cargo test` | Lance les tests. Ils n'ont besoin d'aucun hyperviseur : ils utilisent le pilote de test de libvirt (`test:///default`, en mémoire) et une base SQLite en mémoire. |
+| `cargo test` | Lance les tests. Ils n'ont besoin d'aucun hyperviseur : ils utilisent le pilote de test de libvirt (`test:///default`, en mémoire). Ils ont besoin d'un PostgreSQL jetable (`TEST_DATABASE_URL`), où chaque test crée son propre schéma vide (voir [INSTALLATION.md](INSTALLATION.md#5-tests-et-qualité)). |
 
 À lancer avant chaque commit :
 
@@ -77,6 +77,8 @@ cargo test
 | **HAProxy** | Les trois portes d'entrée HTTPS (interface, API, consoles). Voir [docs/HAPROXY.md](docs/HAPROXY.md). |
 | **nginx** | Sert l'application Angular compilée et relaie `/api` vers l'API. |
 | **OpenSSL** | Crée les certificats auto-signés pour essayer en local. |
+| **PostgreSQL** (image `postgres:17-alpine`) | La base de l'API, dans son propre conteneur. `pg_dump` et `pg_restore` la sauvegardent et la restaurent. |
+| **sqlite3** | Seulement pour reprendre les données d'une ancienne installation SQLite (`scripts/sqlite-to-postgres.sh`). |
 
 L'architecture complète est décrite dans [docs/DOCKER.md](docs/DOCKER.md).
 

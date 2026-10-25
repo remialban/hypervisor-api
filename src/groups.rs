@@ -35,7 +35,7 @@ static TREE_LOCK: Mutex<()> = Mutex::const_new(());
 
 /// Every group under ?1, itself included, following the subgroups.
 const SUBTREE: &str = "WITH RECURSIVE tree(id) AS (
-    SELECT ?1 UNION SELECT s.child_id FROM user_group_subgroups s JOIN tree t ON s.group_id = t.id)";
+    SELECT $1::TEXT UNION SELECT s.child_id FROM user_group_subgroups s JOIN tree t ON s.group_id = t.id)";
 
 const GROUP_SELECT: &str = "SELECT g.id, g.name, g.description,
     (SELECT COUNT(*) FROM user_group_members m WHERE m.group_id = g.id) AS member_count,
@@ -142,7 +142,7 @@ pub async fn create(
     let id = Uuid::new_v4().to_string();
     let created_at = now();
     sqlx::query(
-        "INSERT INTO user_groups (id, name, description, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO user_groups (id, name, description, created_at, updated_at) VALUES ($1, $2, $3, $4, $5)",
     )
     .bind(&id)
     .bind(&name)
@@ -167,7 +167,7 @@ pub async fn get(
     let members = sqlx::query_as::<_, GroupMember>(
         "SELECT m.user_id, u.username, m.created_at AS added_at
          FROM user_group_members m JOIN users u ON u.id = m.user_id
-         WHERE m.group_id = ? ORDER BY u.username",
+         WHERE m.group_id = $1 ORDER BY u.username",
     )
     .bind(&group.id)
     .fetch_all(&state.db)
@@ -175,7 +175,7 @@ pub async fn get(
     let subgroups = sqlx::query_as::<_, GroupRef>(
         "SELECT g.id, g.name, s.created_at AS added_at
          FROM user_group_subgroups s JOIN user_groups g ON g.id = s.child_id
-         WHERE s.group_id = ? ORDER BY g.name",
+         WHERE s.group_id = $1 ORDER BY g.name",
     )
     .bind(&group.id)
     .fetch_all(&state.db)
@@ -183,7 +183,7 @@ pub async fn get(
     let parents = sqlx::query_as::<_, GroupRef>(
         "SELECT g.id, g.name, s.created_at AS added_at
          FROM user_group_subgroups s JOIN user_groups g ON g.id = s.group_id
-         WHERE s.child_id = ? ORDER BY g.name",
+         WHERE s.child_id = $1 ORDER BY g.name",
     )
     .bind(&group.id)
     .fetch_all(&state.db)
@@ -217,14 +217,16 @@ pub async fn update(
         Some(description) => validate_description(description)?,
         None => group.description,
     };
-    sqlx::query("UPDATE user_groups SET name = ?, description = ?, updated_at = ? WHERE id = ?")
-        .bind(&name)
-        .bind(&description)
-        .bind(now())
-        .bind(&group.id)
-        .execute(&state.db)
-        .await
-        .map_err(name_conflict)?;
+    sqlx::query(
+        "UPDATE user_groups SET name = $1, description = $2, updated_at = $3 WHERE id = $4",
+    )
+    .bind(&name)
+    .bind(&description)
+    .bind(now())
+    .bind(&group.id)
+    .execute(&state.db)
+    .await
+    .map_err(name_conflict)?;
     audit::record(&state, &user, "group.update", &group.id, &name).await;
     Ok(Json(load(&state, &group.id).await?))
 }
@@ -238,7 +240,7 @@ pub async fn delete(
 ) -> Result<StatusCode, ApiError> {
     user.require_admin()?;
     let group = load(&state, &group_id).await?;
-    sqlx::query("DELETE FROM user_groups WHERE id = ?")
+    sqlx::query("DELETE FROM user_groups WHERE id = $1")
         .bind(&group.id)
         .execute(&state.db)
         .await?;
@@ -259,7 +261,7 @@ pub async fn members(
     let group = load(&state, &group_id).await?;
     let members = sqlx::query_as::<_, EffectiveMember>(&format!(
         "{SUBTREE}
-         SELECT u.id AS user_id, u.username, MAX(m.group_id = ?1) AS direct
+         SELECT u.id AS user_id, u.username, BOOL_OR(m.group_id = $1) AS direct
          FROM tree t JOIN user_group_members m ON m.group_id = t.id JOIN users u ON u.id = m.user_id
          GROUP BY u.id ORDER BY u.username"
     ))
@@ -277,13 +279,13 @@ pub async fn add_member(
 ) -> Result<StatusCode, ApiError> {
     user.require_admin()?;
     let group = load(&state, &group_id).await?;
-    let username: Option<String> = sqlx::query_scalar("SELECT username FROM users WHERE id = ?")
+    let username: Option<String> = sqlx::query_scalar("SELECT username FROM users WHERE id = $1")
         .bind(&user_id)
         .fetch_optional(&state.db)
         .await?;
     let username = username.ok_or_else(|| ApiError::NotFound("User not found".into()))?;
     sqlx::query(
-        "INSERT OR IGNORE INTO user_group_members (group_id, user_id, created_at) VALUES (?, ?, ?)",
+        "INSERT INTO user_group_members (group_id, user_id, created_at) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING",
     )
     .bind(&group.id)
     .bind(&user_id)
@@ -302,7 +304,7 @@ pub async fn remove_member(
 ) -> Result<StatusCode, ApiError> {
     user.require_admin()?;
     let group = load(&state, &group_id).await?;
-    let result = sqlx::query("DELETE FROM user_group_members WHERE group_id = ? AND user_id = ?")
+    let result = sqlx::query("DELETE FROM user_group_members WHERE group_id = $1 AND user_id = $2")
         .bind(&group.id)
         .bind(&user_id)
         .execute(&state.db)
@@ -331,12 +333,13 @@ pub async fn add_subgroup(
     }
     {
         let _tree = TREE_LOCK.lock().await;
-        let cycle: Option<i64> =
-            sqlx::query_scalar(&format!("{SUBTREE} SELECT 1 FROM tree WHERE id = ?2"))
-                .bind(&child.id)
-                .bind(&group.id)
-                .fetch_optional(&state.db)
-                .await?;
+        let cycle: Option<i64> = sqlx::query_scalar(&format!(
+            "{SUBTREE} SELECT 1::BIGINT FROM tree WHERE id = $2"
+        ))
+        .bind(&child.id)
+        .bind(&group.id)
+        .fetch_optional(&state.db)
+        .await?;
         if cycle.is_some() {
             return Err(ApiError::Conflict(format!(
                 "{} is already inside {}: adding it would put the group inside itself",
@@ -344,7 +347,7 @@ pub async fn add_subgroup(
             )));
         }
         sqlx::query(
-            "INSERT OR IGNORE INTO user_group_subgroups (group_id, child_id, created_at) VALUES (?, ?, ?)",
+            "INSERT INTO user_group_subgroups (group_id, child_id, created_at) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING",
         )
         .bind(&group.id)
         .bind(&child.id)
@@ -365,7 +368,7 @@ pub async fn remove_subgroup(
     user.require_admin()?;
     let group = load(&state, &group_id).await?;
     let result =
-        sqlx::query("DELETE FROM user_group_subgroups WHERE group_id = ? AND child_id = ?")
+        sqlx::query("DELETE FROM user_group_subgroups WHERE group_id = $1 AND child_id = $2")
             .bind(&group.id)
             .bind(&child_id)
             .execute(&state.db)
@@ -397,7 +400,7 @@ pub async fn user_groups(
     Path(user_id): Path<String>,
 ) -> Result<Json<Vec<UserGroup>>, ApiError> {
     user.require_admin()?;
-    let exists: Option<i64> = sqlx::query_scalar("SELECT 1 FROM users WHERE id = ?")
+    let exists: Option<i64> = sqlx::query_scalar("SELECT 1::BIGINT FROM users WHERE id = $1")
         .bind(&user_id)
         .fetch_optional(&state.db)
         .await?;
@@ -409,9 +412,9 @@ pub async fn user_groups(
 pub async fn groups_of(state: &SharedState, user_id: &str) -> Result<Vec<UserGroup>, ApiError> {
     Ok(sqlx::query_as::<_, UserGroup>(
         "WITH RECURSIVE mine(id, direct) AS (
-             SELECT group_id, 1 FROM user_group_members WHERE user_id = ?1
-             UNION SELECT s.group_id, 0 FROM user_group_subgroups s JOIN mine m ON s.child_id = m.id)
-         SELECT g.id, g.name, g.description, MAX(m.direct) AS direct
+             SELECT group_id, TRUE FROM user_group_members WHERE user_id = $1
+             UNION SELECT s.group_id, FALSE FROM user_group_subgroups s JOIN mine m ON s.child_id = m.id)
+         SELECT g.id, g.name, g.description, BOOL_OR(m.direct) AS direct
          FROM mine m JOIN user_groups g ON g.id = m.id
          GROUP BY g.id ORDER BY g.name",
     )
@@ -423,7 +426,7 @@ pub async fn groups_of(state: &SharedState, user_id: &str) -> Result<Vec<UserGro
 // ---------- helpers ----------
 
 async fn load(state: &SharedState, group_id: &str) -> Result<Group, ApiError> {
-    sqlx::query_as::<_, Group>(&format!("{GROUP_SELECT} WHERE g.id = ?"))
+    sqlx::query_as::<_, Group>(&format!("{GROUP_SELECT} WHERE g.id = $1"))
         .bind(group_id)
         .fetch_optional(&state.db)
         .await?

@@ -9,7 +9,7 @@ Le projet est découpé en deux dépôts :
 
 | Dépôt | Rôle | Technologies |
 |---|---|---|
-| **`hypervisor-api`** (celui-ci) | Le **serveur**. Il pilote les hyperviseurs par libvirt (en local ou par SSH), garde les comptes, les droits et l'historique dans une base SQLite, et expose une API REST. Il fournit aussi les consoles des VM par noVNC. | Rust, Axum, libvirt, SQLite, Packer, noVNC |
+| **`hypervisor-api`** (celui-ci) | Le **serveur**. Il pilote les hyperviseurs par libvirt (en local ou par SSH), garde les comptes, les droits et l'historique dans une base PostgreSQL, et expose une API REST. Il fournit aussi les consoles des VM par noVNC. | Rust, Axum, libvirt, PostgreSQL, Packer, noVNC |
 | **`hypervisor-ui`** | L'**interface web**. Une application Angular qui affiche les écrans et appelle l'API. Elle ne parle jamais aux hyperviseurs et ne garde aucune donnée. | Angular, TypeScript, nginx |
 
 Les deux tournent dans Docker, chacun derrière son HAProxy en HTTPS.

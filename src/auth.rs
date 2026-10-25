@@ -148,7 +148,7 @@ impl FromRequestParts<SharedState> for AuthUser {
         let user_id = decode_access_token(state, token.trim())?;
 
         let row = sqlx::query_as::<_, AuthRow>(
-            "SELECT id, username, role, disabled FROM users WHERE id = ?",
+            "SELECT id, username, role, disabled FROM users WHERE id = $1",
         )
         .bind(&user_id)
         .fetch_optional(&state.db)

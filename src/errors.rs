@@ -82,10 +82,10 @@ impl From<ApiError> for (StatusCode, Json<Message>) {
     }
 }
 
-// Lets `?` convert a SQLite error into an ApiError automatically.
+// Lets `?` convert a database error into an ApiError automatically.
 impl From<sqlx::Error> for ApiError {
     fn from(err: sqlx::Error) -> Self {
-        eprintln!("SQLite error: {err}");
+        eprintln!("Database error: {err}");
         ApiError::Internal("Database error".into())
     }
 }

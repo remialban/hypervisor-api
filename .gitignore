@@ -1,7 +1,7 @@
 # Rust build artifacts
 /target/
 
-# Local SQLite database files
+# Old SQLite database files (before PostgreSQL), kept locally for the data migration
 *.db
 *.db-shm
 *.db-wal

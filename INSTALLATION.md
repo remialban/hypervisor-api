@@ -21,6 +21,8 @@ Dans les deux cas, l'API pilote des hyperviseurs KVM via libvirt. La
 - Linux avec KVM et libvirt.
 - Rust 1.88 ou plus récent (édition 2024 et `if let … &&`) : <https://rustup.rs>.
 - Les en-têtes de libvirt et `pkg-config`, pour compiler la crate `virt`.
+- **PostgreSQL**, pour la base de l'API. Le plus simple est de le lancer avec Docker
+  (étape 2).
 
 Debian / Ubuntu :
 
@@ -53,17 +55,27 @@ En option :
 
 ### 2. Compiler et lancer l'API
 
-Depuis la racine du projet :
+L'API a besoin d'une base PostgreSQL. Pour le développement, lancez-en une avec Docker :
+elle sert aussi aux tests (étape 5).
 
 ```bash
+docker run -d --name hypervisor-dev-pg --restart unless-stopped \
+  -e POSTGRES_PASSWORD=dev -e POSTGRES_DB=hypervisor \
+  -p 127.0.0.1:55432:5432 postgres:17-alpine -c max_connections=500
+docker exec hypervisor-dev-pg createdb -U postgres hypervisor_test   # base des tests
+```
+
+Puis, depuis la racine du projet :
+
+```bash
+DATABASE_URL=postgres://postgres:dev@127.0.0.1:55432/hypervisor \
 ADMIN_PASSWORD='un-mot-de-passe' \
 JWT_SECRET="$(openssl rand -base64 48)" \
 cargo run
 ```
 
-L'API écoute sur `http://127.0.0.1:3000`. Au premier démarrage, la base SQLite `api.db` est
-créée dans le dossier courant, les migrations sont appliquées, et un administrateur `admin`
-est créé avec `ADMIN_PASSWORD`. Sans `ADMIN_PASSWORD`, un mot de passe est généré et affiché
+L'API écoute sur `http://127.0.0.1:3000`. Au premier démarrage, les tables sont créées
+(migrations de `migrations/`), et un administrateur `admin` est créé avec `ADMIN_PASSWORD`. Sans `ADMIN_PASSWORD`, un mot de passe est généré et affiché
 **une seule fois** dans la console.
 
 Sans `JWT_SECRET`, une clé aléatoire est utilisée à chaque démarrage : tout le monde est
@@ -117,7 +129,17 @@ ouvrez-la dans le navigateur.
 ### 5. Tests et qualité
 
 Les tests n'ont besoin d'aucun hyperviseur : ils utilisent le pilote en mémoire de libvirt
-(`test:///default`) et une base SQLite en mémoire.
+(`test:///default`). Ils ont en revanche besoin de PostgreSQL : chaque test crée son
+propre schéma vide dans la base `TEST_DATABASE_URL`. Par défaut, c'est
+`postgres://postgres:test@127.0.0.1:55432/hypervisor_test`. Avec le conteneur de l'étape 2,
+indiquez son mot de passe :
+
+```bash
+export TEST_DATABASE_URL=postgres://postgres:dev@127.0.0.1:55432/hypervisor_test
+```
+
+Cette base est jetable : les tests y laissent un schéma `test_…` chacun. Pour la vider :
+`docker exec hypervisor-dev-pg dropdb -U postgres hypervisor_test`, puis la recréer.
 
 ```bash
 cargo test
@@ -135,7 +157,8 @@ avec l'environnement `local` déjà pointé sur `http://127.0.0.1:3000`.
 
 | Variable | Défaut | Rôle |
 |---|---|---|
-| `DATABASE_URL` | `sqlite://api.db?mode=rwc` | Base SQLite |
+| `DATABASE_URL` | — (obligatoire) | Base PostgreSQL : `postgres://utilisateur:motdepasse@hôte:5432/base` |
+| `TEST_DATABASE_URL` | `postgres://postgres:test@127.0.0.1:55432/hypervisor_test` | Base jetable des tests (`cargo test`) |
 | `JWT_SECRET` (ou `JWT_SECRET_FILE`) | aléatoire | Signe les jetons d'accès (32 caractères minimum) |
 | `ADMIN_USERNAME` / `ADMIN_PASSWORD` | `admin` / généré | Premier administrateur, si la base est vide |
 | `ACCESS_TOKEN_TTL_SECONDS` | `900` | Durée d'un jeton d'accès |
@@ -161,7 +184,7 @@ et le frontend Angular. Elle utilise deux dépôts, chacun avec son `docker-comp
 - `hypervisor-api` (ce dépôt) : l'API et noVNC ;
 - `hypervisor-ui` : le frontend.
 
-Au total, six conteneurs tournent :
+Au total, sept conteneurs tournent :
 
 | Conteneur | Dépôt | Rôle | Ports sur la machine |
 |---|---|---|---|
@@ -171,6 +194,7 @@ Au total, six conteneurs tournent :
 | `hypervisor-api` | api | L'API Rust | `127.0.0.1:3000` seulement |
 | `hypervisor-novnc-haproxy` | api | Entrée HTTPS des **consoles** | `6443` (HTTPS), `6081` (redirigé) |
 | `hypervisor-novnc` | api | noVNC et websockify | aucun |
+| `hypervisor-db` | api | La base **PostgreSQL** de l'API, sur un réseau que seule l'API rejoint | aucun |
 
 Le fonctionnement détaillé (réseaux, volumes, chemin des requêtes, schémas) est dans
 [docs/DOCKER.md](docs/DOCKER.md), et celui des HAProxy dans [docs/HAPROXY.md](docs/HAPROXY.md).
@@ -266,6 +290,9 @@ NOVNC_HTTPS_PORT=6443
 # avec un nom ou une IP présent dans le certificat
 NOVNC_URL=https://192.168.1.10:6443/vnc.html
 
+# Base PostgreSQL : lettres et chiffres seulement (le mot de passe est mis dans une URL)
+POSTGRES_PASSWORD=<résultat de : openssl rand -hex 24>
+
 # Secrets : à générer, jamais les valeurs d'exemple
 JWT_SECRET=<résultat de : openssl rand -base64 48>
 ADMIN_USERNAME=admin
@@ -323,7 +350,7 @@ docker compose up -d --build --remove-orphans
 cd ~/hypervisor/hypervisor-ui
 docker compose up -d --build
 
-# Les six conteneurs doivent être « Up »
+# Les sept conteneurs doivent être « Up »
 docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
 ```
 
@@ -393,7 +420,8 @@ l'API tant que le front y est branché.
 (cd ~/hypervisor/hypervisor-api && docker compose down)
 ```
 
-Les données restent : `down` ne supprime ni `./data` ni le volume des jetons.
+Les données restent : `down` ne supprime pas les volumes (base `db-data`, jetons). En
+revanche, **`docker compose down -v` efface la base** : ne l'utilisez pas sans sauvegarde.
 
 **Mettre à jour** :
 
@@ -404,10 +432,28 @@ Les données restent : `down` ne supprime ni `./data` ni le volume des jetons.
 
 Les migrations de la base s'appliquent toutes seules au démarrage de l'API.
 
-**Sauvegarder** : `hypervisor-api/data/api.db` contient les comptes, les groupes, les droits,
-les propriétaires des VM, les templates et le journal d'audit. Les VM et leurs disques sont,
-eux, sur les hyperviseurs. Le front ne garde aucune donnée. Changer `JWT_SECRET` déconnecte
-tout le monde mais ne perd rien.
+**Sauvegarder** : la base PostgreSQL contient les comptes, les groupes, les droits, les
+propriétaires des VM, les templates et le journal d'audit. Les VM et leurs disques sont,
+eux, sur les hyperviseurs. Le front ne garde aucune donnée.
+
+```bash
+cd ~/hypervisor/hypervisor-api
+docker compose exec -T db pg_dump -U hypervisor -Fc hypervisor > sauvegarde.dump      # sauvegarder
+docker compose exec -T db pg_restore -U hypervisor -d hypervisor --clean < sauvegarde.dump   # restaurer
+```
+
+Changer `JWT_SECRET` déconnecte tout le monde mais ne perd rien.
+
+**Reprendre les données d'une ancienne installation SQLite** (`data/api.db`) : démarrez la
+stack une fois sur PostgreSQL (l'API crée les tables), puis, dans `hypervisor-api` :
+
+```bash
+scripts/sqlite-to-postgres.sh data/api.db
+```
+
+Le script demande confirmation, arrête l'API, **vide** la base PostgreSQL, y copie tout le
+contenu de `api.db` (comptes, hyperviseurs, droits, groupes, templates, journal…) et
+redémarre l'API. Le fichier SQLite n'est que lu. Il faut `sqlite3` sur la machine.
 
 ### 10. Problèmes courants
 
@@ -424,6 +470,8 @@ tout le monde mais ne perd rien.
 | Logs de l'API : `Permission denied (publickey…)` vers un hyperviseur | La clé SSH n'est pas autorisée sur l'hyperviseur, ou `SSH_PRIVATE_KEY_HOST_PATH` est faux. |
 | Logs de l'API : `Host key verification failed` | L'hyperviseur n'est pas dans `~/.ssh/known_hosts` de la machine Docker : connectez-vous-y une fois en SSH. |
 | La console reste vide ou ne se connecte pas | Le certificat n'a pas été accepté sur `https://<serveur>:6443`, ou `NOVNC_URL` n'est pas `https://<serveur>:6443/vnc.html`. |
+| L'API redémarre en boucle : `Could not initialize the PostgreSQL database` | La base n'est pas joignable, ou `POSTGRES_PASSWORD` a changé après sa création (le mot de passe est fixé au premier démarrage du volume `db-data`). |
+| `POSTGRES_PASSWORD doit être défini` | Ajoutez `POSTGRES_PASSWORD` au `.env` de l'API. |
 | `429 Too Many Requests` à la connexion | Trop d'essais : 20 requêtes / 10 s par IP (HAProxy), ou 5 mots de passe faux pour un compte (bloqué 15 minutes). |
 
 

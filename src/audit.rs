@@ -72,7 +72,7 @@ pub async fn insert(
 ) {
     let result = sqlx::query(
         "INSERT INTO audit_log (at, user_id, username, action, target, detail, success)
-         VALUES (?, ?, ?, ?, ?, ?, ?)",
+         VALUES ($1, $2, $3, $4, $5, $6, $7)",
     )
     .bind(now())
     .bind(user_id)
@@ -112,8 +112,8 @@ pub async fn list(
     let offset = query.offset.unwrap_or(0).max(0);
     let entries = sqlx::query_as::<_, AuditEntry>(
         "SELECT id, at, user_id, username, action, target, detail, success FROM audit_log
-         WHERE (?1 IS NULL OR user_id = ?1) AND (?2 IS NULL OR action = ?2)
-         ORDER BY id DESC LIMIT ?3 OFFSET ?4",
+         WHERE ($1 IS NULL OR user_id = $1) AND ($2 IS NULL OR action = $2)
+         ORDER BY id DESC LIMIT $3 OFFSET $4",
     )
     .bind(query.user_id)
     .bind(query.action)

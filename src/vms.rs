@@ -72,7 +72,7 @@ pub async fn create(
         Some(owner_id) => {
             user.require_admin()?;
             let exists: Option<i64> =
-                sqlx::query_scalar("SELECT 1 FROM users WHERE id = ? AND disabled = 0")
+                sqlx::query_scalar("SELECT 1::BIGINT FROM users WHERE id = $1 AND NOT disabled")
                     .bind(owner_id)
                     .fetch_optional(&state.db)
                     .await?;
@@ -170,7 +170,7 @@ pub async fn clone(
 
     // The clone belongs to whoever asks for it, and counts in their quota.
     let source: Option<(i64, i64, i64)> = sqlx::query_as(
-        "SELECT vcpus, memory_mb, disk_gb FROM vm_owners WHERE hypervisor_id = ? AND vm_id = ?",
+        "SELECT vcpus, memory_mb, disk_gb FROM vm_owners WHERE hypervisor_id = $1 AND vm_id = $2",
     )
     .bind(&hypervisor_id)
     .bind(&vm_id)

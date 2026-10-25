@@ -1,22 +1,11 @@
 use axum::{
-    routing::{get, post, put},
     Router,
+    routing::{get, post, put},
 };
 
 use crate::{
-    audit,
-    common::ping,
-    groups,
-    hypervisors,
-    infrastructure,
-    jobs,
-    shares,
-    state::SharedState,
-    templates,
-    users,
-    vm_options,
-    vms,
-    vnc,
+    audit, common::ping, groups, hypervisors, infrastructure, jobs, shares, state::SharedState,
+    templates, users, vm_options, vms, vnc,
 };
 
 pub fn create_routes(state: SharedState) -> Router {

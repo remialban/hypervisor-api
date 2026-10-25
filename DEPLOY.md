@@ -28,7 +28,7 @@ mkdir -p tls && openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256
 Pour ouvrir l'application depuis une autre machine, ajoutez son adresse au certificat, par
 exemple `IP:192.168.1.10` après `IP:127.0.0.1`.
 
-## 3. Lancer l'API et noVNC
+## 3. Lancer l'API, noVNC et la base
 
 ```bash
 cp .env.example .env
@@ -40,6 +40,7 @@ Dans `.env`, changez ces lignes :
 SSH_PRIVATE_KEY_HOST_PATH=/home/<vous>/.ssh/id_ed25519
 TLS_CERT_PATH=./tls/cert.pem
 TLS_KEY_PATH=./tls/key.pem
+POSTGRES_PASSWORD=<lettres et chiffres au hasard>
 JWT_SECRET=<au moins 32 caractères au hasard>
 ADMIN_PASSWORD=<mot de passe de l'administrateur>
 ```
@@ -94,7 +95,11 @@ cd hypervisor-ui && docker compose down
 cd ../hypervisor-api && docker compose down
 ```
 
-Les données (comptes, droits, VM…) restent dans `hypervisor-api/data/`.
+Les données (comptes, droits, VM…) restent dans la base PostgreSQL (volume Docker `db-data`).
+N'utilisez pas `docker compose down -v` : il l'effacerait.
+
+Vous aviez déjà une installation avec l'ancienne base SQLite (`data/api.db`) ? Reprenez ses
+données avec `scripts/sqlite-to-postgres.sh` (voir [INSTALLATION.md](INSTALLATION.md#9-exploitation)).
 
 ## Si ça ne marche pas
 
