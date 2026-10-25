@@ -13,6 +13,7 @@
 //!   built versions, without configuration nor logs. A `restricted` template is only shown
 //!   to the users an admin listed (`.../access`). They create VMs from it within their
 //!   quota and own those VMs, as with `POST .../vms`.
+//! * An admin can turn off VM creation from a template (`allow_vm_creation`), for everyone.
 //!
 //! Builds run in the background, one at a time per template and `MAX_CONCURRENT_BUILDS`
 //! overall. A version goes `pending` (waiting for a build slot), `in_progress`, then
@@ -83,7 +84,7 @@ const LOG_TRUNCATED: &str = "[log truncated: the build output exceeded the limit
 const DEFAULT_POOL: &str = "default";
 const GIB: u64 = 1024 * 1024 * 1024;
 
-const TEMPLATE_COLUMNS: &str = "t.id, t.hypervisor_id, t.name, t.packer_config, t.disk_name, t.pool, t.visibility, t.created_at, t.updated_at";
+const TEMPLATE_COLUMNS: &str = "t.id, t.hypervisor_id, t.name, t.packer_config, t.disk_name, t.pool, t.visibility, t.allow_vm_creation, t.created_at, t.updated_at";
 const VERSION_COLUMNS: &str = "template_id, version, packer_config, disk_name, pool, volume, status, disk_size_gb, error, created_at, started_at, finished_at";
 /// What a caller may see of `templates t`. Parameters: ?2 is admin, ?3 the caller's id.
 /// A user sees a template open to the hypervisor or to them, once it has a built version.
@@ -147,6 +148,7 @@ struct TemplateRow {
     disk_name: String,
     pool: String,
     visibility: Visibility,
+    allow_vm_creation: bool,
     created_at: i64,
     updated_at: i64,
 }
@@ -164,6 +166,8 @@ pub struct Template {
     /// Pool receiving the built disks.
     pub pool: String,
     pub visibility: Visibility,
+    /// When false, nobody (admins included) can create a VM from this template.
+    pub allow_vm_creation: bool,
     /// State of the latest version (for users: of the latest built one).
     pub status: Option<TemplateStatus>,
     /// Version used to create VMs when none is given: the latest built one.
@@ -207,6 +211,8 @@ pub struct CreateTemplate {
     pub pool: Option<String>,
     /// Default: `hypervisor`.
     pub visibility: Option<Visibility>,
+    /// Allow creating VMs from this template (default: true).
+    pub allow_vm_creation: Option<bool>,
 }
 
 /// Fields left out keep their value. Existing versions are not changed: rebuild to apply.
@@ -217,6 +223,7 @@ pub struct UpdateTemplate {
     pub disk_name: Option<String>,
     pub pool: Option<String>,
     pub visibility: Option<Visibility>,
+    pub allow_vm_creation: Option<bool>,
 }
 
 /// Body of `POST .../templates/{template_id}/vms`. The disk is a copy of the version's.
@@ -351,8 +358,8 @@ pub async fn create(
     let id = Uuid::new_v4().to_string();
     let created_at = now();
     sqlx::query(
-        "INSERT INTO templates (id, hypervisor_id, name, packer_config, disk_name, pool, visibility, created_by, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO templates (id, hypervisor_id, name, packer_config, disk_name, pool, visibility, allow_vm_creation, created_by, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&id)
     .bind(&hypervisor_id)
@@ -361,6 +368,7 @@ pub async fn create(
     .bind(&definition.disk_name)
     .bind(&definition.pool)
     .bind(body.visibility.unwrap_or(Visibility::Hypervisor))
+    .bind(body.allow_vm_creation.unwrap_or(true))
     .bind(&user.id)
     .bind(created_at)
     .bind(created_at)
@@ -406,7 +414,7 @@ pub async fn update(
     };
     definition.validate()?;
     sqlx::query(
-        "UPDATE templates SET name = ?, packer_config = ?, disk_name = ?, pool = ?, visibility = ?, updated_at = ?
+        "UPDATE templates SET name = ?, packer_config = ?, disk_name = ?, pool = ?, visibility = ?, allow_vm_creation = ?, updated_at = ?
          WHERE id = ?",
     )
     .bind(&definition.name)
@@ -414,6 +422,7 @@ pub async fn update(
     .bind(&definition.disk_name)
     .bind(&definition.pool)
     .bind(body.visibility.unwrap_or(row.visibility))
+    .bind(body.allow_vm_creation.unwrap_or(row.allow_vm_creation))
     .bind(now())
     .bind(&template_id)
     .execute(&state.db)
@@ -770,6 +779,11 @@ pub async fn create_vm(
     access::require_grant(&state, &user, &hypervisor_id).await?;
     let uri = libvirt::hypervisor_uri(&state.db, &hypervisor_id).await?;
     let row = find_template(&state, &user, &hypervisor_id, &template_id).await?;
+    if !row.allow_vm_creation {
+        return Err(ApiError::Conflict(
+            "Creating VMs from this template is disabled".into(),
+        ));
+    }
     let version = match body.version {
         Some(number) => find_version(&state, &user, &row.id, number).await?,
         None => {
@@ -940,6 +954,7 @@ async fn view(
         disk_name: row.disk_name,
         pool: row.pool,
         visibility: row.visibility,
+        allow_vm_creation: row.allow_vm_creation,
         created_at: row.created_at,
         updated_at: row.updated_at,
     })
@@ -2403,6 +2418,74 @@ build {
         assert_eq!(status, StatusCode::NO_CONTENT);
         let (status, _) = app.status_as(&token, Method::GET, &template).await;
         assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn vm_creation_can_be_turned_off_for_a_template() {
+        let app = TestApp::new().await;
+        let (id, _) = insert_template(&app, "created").await;
+        let template = format!("{}/{id}", templates(&app));
+        let (_, token) = granted_user(&app).await;
+        let vm = || json!({ "name": unique("vm"), "memory_mb": 128, "vcpus": 1 });
+
+        let (_, json) = app.status_of(Method::GET, &template).await;
+        assert_eq!(json["allow_vm_creation"], true, "allowed by default");
+        let (status, _, json) = app
+            .send(
+                Method::PATCH,
+                &template,
+                Some(json!({ "allow_vm_creation": false })),
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json["allow_vm_creation"], false);
+
+        // Still listed (the UI can show it as unavailable), but refused for everyone.
+        let (_, listed) = app.status_as(&token, Method::GET, &templates(&app)).await;
+        assert_eq!(listed[0]["allow_vm_creation"], false);
+        let (status, _, _) = app
+            .send_as(
+                Some(&token),
+                Method::POST,
+                &format!("{template}/vms"),
+                Some(vm()),
+            )
+            .await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        let (status, _, _) = app
+            .send(Method::POST, &format!("{template}/vms"), Some(vm()))
+            .await;
+        assert_eq!(status, StatusCode::CONFLICT, "admins too");
+
+        let (status, _, _) = app
+            .send(
+                Method::PATCH,
+                &template,
+                Some(json!({ "allow_vm_creation": true })),
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK);
+        let (status, _, job) = app
+            .send_as(
+                Some(&token),
+                Method::POST,
+                &format!("{template}/vms"),
+                Some(vm()),
+            )
+            .await;
+        assert_eq!(status, StatusCode::ACCEPTED);
+        assert_eq!(
+            app.wait_job(job["id"].as_str().unwrap()).await["status"],
+            "succeeded"
+        );
+
+        // It can also be chosen at creation.
+        let mut body = template_body(&unique("tpl"), INVALID_CONFIG);
+        body["allow_vm_creation"] = json!(false);
+        let (status, _, json) = app.send(Method::POST, &templates(&app), Some(body)).await;
+        assert_eq!(status, StatusCode::ACCEPTED);
+        assert_eq!(json["allow_vm_creation"], false);
+        wait_version(&app, json["id"].as_str().unwrap(), 1, ended).await;
     }
 
     // ---------- builds ----------

@@ -32,5 +32,5 @@ docs {
   version: a built version of the template (default: the latest built one, default_version).
   Needs a grant on the hypervisor and a created template; counts in the quota (the template disk size counts as disk_gb).
   Asynchronous: returns 202 with a Job (Location: /api/jobs/{id}), the disk is copied (<name>.qcow2, independent of the template).
-  The caller (or owner_id) owns the new VM.
+  The caller (or owner_id) owns the new VM. 409 if the template has allow_vm_creation: false.
 }

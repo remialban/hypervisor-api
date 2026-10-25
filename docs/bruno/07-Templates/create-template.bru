@@ -32,7 +32,8 @@ script:post-response {
 
 docs {
   Admin only: a Packer configuration runs commands on the build host.
-  Body: CreateTemplate {name, packer_config, disk_name, pool (default "default"), visibility ("hypervisor" default, or "restricted")}.
+  Body: CreateTemplate {name, packer_config, disk_name, pool (default "default"), visibility ("hypervisor" default, or "restricted"),
+  allow_vm_creation (default true: VMs can be created from it)}.
   disk_name is the file name of the image Packer writes (vm_name of the qemu builder).
 
   Creates the template and starts building its version 1. Returns 202 (Location: .../templates/{id});
